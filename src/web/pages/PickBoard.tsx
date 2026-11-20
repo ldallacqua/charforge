@@ -7,7 +7,8 @@ import type { BatchDetail, Item, RegionKind } from '../../shared/types.ts';
 import { useKeys } from '../hooks.ts';
 import { CheckMark, CrossMark } from '../components/marks.tsx';
 import { Kbd } from '../components/parts.tsx';
-import { ReasonPicker } from '../components/Reasons.tsx';
+import { RejectMenu } from '../components/RejectMenu.tsx';
+import { reasonOf } from '../../shared/taxonomy.ts';
 import { BACKGROUNDS, FIT, Viewer, type Bg, type View } from '../components/Viewer.tsx';
 import { HelpOverlay, ReviewHeader, SubmitDialog, useReviewActions } from './ReviewPage.tsx';
 
@@ -19,17 +20,16 @@ export function PickBoard({ batch }: { batch: BatchDetail }) {
   }, [batch.items]);
   const [gi, setGi] = useState(0);
   const [view, setView] = useState<View>(FIT);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [menu, setMenu] = useState<number | null>(null);
   const [bg, setBg] = useState<Bg>('checker');
   const [help, setHelp] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const { patch, locked } = useReviewActions(batch);
 
   const [groupName, cands] = groups[Math.min(gi, groups.length - 1)];
-  const sel = cands.find((c) => c.id === selected) ?? null;
   const cols = cands.length <= 2 ? 2 : cands.length <= 4 ? 2 : cands.length <= 6 ? 3 : 4;
 
-  const pick = (it: Item) => patch(it, { verdict: it.review.verdict === 'approve' ? null : 'approve' });
+  const pick = (it: Item) => patch(it, { verdict: it.review.verdict === 'approve' ? null : 'approve', ...(it.review.verdict === 'approve' ? {} : { reasons: it.review.reasons.filter(isApproval) }) });
   const rejectAll = () => cands.filter((c) => c.review.verdict !== 'reject').forEach((c) => patch(c, { verdict: 'reject' }));
 
   useKeys((e) => {
@@ -45,11 +45,10 @@ export function PickBoard({ batch }: { batch: BatchDetail }) {
     e.preventDefault();
   });
 
-  const toggleReason = (code: string) => {
-    if (!sel) return;
-    const has = sel.review.reasons.includes(code);
-    const reasons = has ? sel.review.reasons.filter((c) => c !== code) : [...sel.review.reasons, code];
-    patch(sel, { reasons, ...(!has && !isApproval(code) && sel.review.verdict === null ? { verdict: 'reject' as const } : {}) });
+  const toggleReason = (it: Item, code: string) => {
+    const has = it.review.reasons.includes(code);
+    const reasons = has ? it.review.reasons.filter((c) => c !== code) : [...it.review.reasons, code];
+    patch(it, { reasons, ...(!has && !isApproval(code) && it.review.verdict !== 'reject' ? { verdict: 'reject' as const } : {}) });
   };
 
   return (
@@ -94,21 +93,34 @@ export function PickBoard({ batch }: { batch: BatchDetail }) {
                 <div
                   key={it.id}
                   className={clsx(
-                    'relative flex h-[300px] flex-col overflow-hidden rounded-lg border bg-room lg:h-auto lg:min-h-[260px]',
-                    v === 'approve' ? 'border-proof' : selected === it.id ? 'border-amber' : 'border-line',
+                    'relative flex h-[300px] flex-col rounded-lg border bg-room lg:h-auto lg:min-h-[260px]',
+                    v === 'approve' ? 'border-proof' : menu === it.id ? 'border-mark' : 'border-line',
                   )}
-                  onPointerDownCapture={() => setSelected(it.id)}
                 >
-                  <Viewer className={clsx('min-h-0 flex-1', v === 'reject' && 'opacity-45')} src={it.url} width={it.width} height={it.height} view={view} onView={setView} bg={bg} padding={0.98} regions={it.regions} />
-                  <div className="flex shrink-0 items-center gap-2 border-t border-line bg-[#1d1d1d] px-2.5 py-1.5">
+                  <div className="relative min-h-0 flex-1 overflow-hidden rounded-t-lg">
+                    <Viewer className={clsx('h-full w-full', v === 'reject' && 'opacity-45')} src={it.url} width={it.width} height={it.height} view={view} onView={setView} bg={bg} padding={0.98} regions={it.regions} />
+                    {v === 'approve' && <CheckMark className="pointer-events-none absolute right-3 top-3 size-10 drop-shadow-[0_1px_3px_rgba(0,0,0,.8)]" animate />}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 rounded-b-lg border-t border-line bg-[#1d1d1d] px-2.5 py-1.5">
                     <span className="font-narrow text-sm font-semibold">{i + 1}</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-dim">{it.label}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs text-dim">{it.label}</div>
+                      {v === 'reject' && (
+                        <button type="button" disabled={locked} onClick={() => setMenu(it.id)} className="block max-w-full truncate text-left text-2xs text-mark hover:underline">
+                          {it.review.reasons.length ? it.review.reasons.map((c) => reasonOf(c)?.label ?? c).join(', ') : 'Dizer o motivo'}
+                        </button>
+                      )}
+                    </div>
                     <button
                       type="button"
                       disabled={locked}
-                      onClick={() => patch(it, { verdict: v === 'reject' ? null : 'reject' })}
+                      onClick={() => {
+                        if (v !== 'reject') patch(it, { verdict: 'reject' });
+                        setMenu(menu === it.id ? null : it.id);
+                      }}
                       className={clsx('grid size-7 place-items-center rounded-md', v === 'reject' ? 'bg-mark/20' : 'hover:bg-white/10')}
-                      aria-label={`Recusar ${it.label}`}
+                      aria-label={`Recusar ${it.label} e dizer o motivo`}
+                      aria-expanded={menu === it.id}
                     >
                       <CrossMark className="size-4" />
                     </button>
@@ -121,7 +133,21 @@ export function PickBoard({ batch }: { batch: BatchDetail }) {
                       {v === 'approve' ? 'Escolhida' : 'Escolher'} <Kbd>{i + 1}</Kbd>
                     </button>
                   </div>
-                  {v === 'approve' && <CheckMark className="pointer-events-none absolute right-3 top-3 size-10 drop-shadow-[0_1px_3px_rgba(0,0,0,.8)]" animate />}
+                  {menu === it.id && (
+                    <RejectMenu
+                      kind={(it.meta.kind as RegionKind | undefined) ?? it.regions[0]?.kind ?? null}
+                      phase={batch.phase}
+                      selected={it.review.reasons}
+                      note={it.review.note}
+                      onToggle={(code) => toggleReason(it, code)}
+                      onNote={(note) => patch(it, { note })}
+                      onUndo={() => {
+                        patch(it, { verdict: null, reasons: [] });
+                        setMenu(null);
+                      }}
+                      onClose={() => setMenu(null)}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -134,18 +160,13 @@ export function PickBoard({ batch }: { batch: BatchDetail }) {
           <button type="button" disabled={locked} onClick={rejectAll} className="mt-3 rounded-md border border-line px-3 py-1.5 text-xs text-dim hover:border-mark/70 hover:text-ink">
             Nenhuma serve neste grupo
           </button>
-          <div className="mt-5 border-t border-line pt-4">
-            {sel ? (
-              <>
-                <div className="mb-3 text-sm font-semibold">Motivos para {sel.label}</div>
-                <fieldset disabled={locked}>
-                  <ReasonPicker kind={(sel.meta.kind as RegionKind | undefined) ?? sel.regions[0]?.kind ?? null} selected={sel.review.reasons} onToggle={toggleReason} compact />
-                </fieldset>
-              </>
-            ) : (
-              <p className="text-xs text-faint">Clique numa candidata para dizer o que há de errado nela.</p>
-            )}
-          </div>
+          {batch.notes && (
+            <div className="mt-5 border-t border-line pt-4">
+              <div className="mb-1 text-xs font-semibold text-dim">Notas do Claude</div>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">{batch.notes}</p>
+            </div>
+          )}
+          <p className="mt-5 border-t border-line pt-4 text-xs text-faint">Para recusar, use o X embaixo da própria imagem: os motivos abrem ali mesmo.</p>
         </aside>
       </div>
       {help && <HelpOverlay pick onClose={() => setHelp(false)} />}

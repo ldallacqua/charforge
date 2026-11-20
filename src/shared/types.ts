@@ -1,6 +1,8 @@
 // Types shared by the server, the web app and the agent CLI.
 // Boxes are always in the image's own pixels: [x0, y0, x1, y1].
 
+import type { RenderProfile, RenderRequest } from '../render/types.ts';
+
 export type Box = [number, number, number, number];
 
 export type RegionKind =
@@ -99,16 +101,58 @@ export interface BatchDetail extends Batch {
   items: Item[];
 }
 
+export interface GateMark {
+  status: 'done';
+  at: string;
+  by: 'owner' | 'agent';
+  note?: string;
+}
+
 export interface Character {
   id: number;
   slug: string;
   name: string;
   summary: string;
+  /** what the owner asked for, in their words: the source of truth for discovery */
+  brief: string;
   coverUrl: string | null;
   createdAt: string;
   openBatches: number;
-  /** phase id -> 'done' | 'active' | 'waiting' (derived from the batches) */
+  /** phase id -> state (done only when the gate was signed off) */
   phases: Record<string, PhaseState>;
+  gates: Record<string, GateMark>;
+  /** which backend renders SFW and NSFW for this character */
+  profile: RenderProfile | null;
+}
+
+export interface Job {
+  id: number;
+  characterSlug: string;
+  phase: string;
+  kind: BatchKind;
+  rating: 'sfw' | 'nsfw';
+  backend: string;
+  title: string;
+  group: string;
+  request: RenderRequest;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  worker: string | null;
+  error: string | null;
+  batchId: number | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface NextStep {
+  gate: string | null;
+  state: 'start' | 'rendering' | 'owner' | 'fix' | 'signoff' | 'done';
+  /** what the owner has to do now, in Portuguese (null: nothing) */
+  owner: string | null;
+  /** what the agent has to do now, in English */
+  agent: string | null;
+  commands: string[];
+  batchId?: number;
 }
 
 export type PhaseState = 'done' | 'active' | 'waiting' | 'idle';
@@ -120,6 +164,8 @@ export interface CharacterDetail extends Character {
 /** What the agent sends with `forge submit` (file fields are multipart field names). */
 export interface Manifest {
   character: string;
+  /** set by the server when a render job produced the batch */
+  jobId?: number;
   phase: string;
   kind?: BatchKind;
   title: string;
@@ -143,4 +189,5 @@ export type ServerEvent =
   | { type: 'batch.created'; batch: Batch }
   | { type: 'batch.updated'; batch: Batch }
   | { type: 'review.updated'; itemId: number; batchId: number; review: Review }
-  | { type: 'character.updated'; slug: string };
+  | { type: 'character.updated'; slug: string }
+  | { type: 'job.updated'; job: Job };

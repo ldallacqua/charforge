@@ -1,0 +1,16 @@
+# Run the studio in Docker. Data stays in ./data (never committed).
+# Backends that need only the network (comfyui, openai) can run inside; the Codex CLI cannot:
+# run `pnpm forge worker` on the machine where it is installed.
+services:
+  charforge:
+    build: .
+    image: charforge:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      COMFYUI_URL: ${COMFYUI_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CHARFORGE_WORKER_BACKENDS: ${CHARFORGE_WORKER_BACKENDS:-}
+    volumes:
+      - ./data:/data

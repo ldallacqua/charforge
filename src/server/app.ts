@@ -4,16 +4,28 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
+import { basename, join, relative } from 'node:path';
 import type { Db } from './db.ts';
 import { storeImage, safeName } from './store.ts';
 import { exportVerdicts, submitBlockers } from './verdicts.ts';
 import { phaseOf } from '../shared/phases.ts';
 import { reasonOf } from '../shared/taxonomy.ts';
-import type { Box, Manifest, Pin, Region, Review, ServerEvent } from '../shared/types.ts';
+import type { BatchKind, Box, GateMark, Job, Manifest, Pin, Region, Review, ServerEvent } from '../shared/types.ts';
+import { BACKENDS, PRESETS, backendFor, render, validateProfile, type RenderProfile, type RenderRequest } from '../render/index.ts';
+import { localInputs } from '../render/inputs.ts';
+import { nextStep } from './next.ts';
 
 type Listener = (e: ServerEvent) => void;
+
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
 
 export function createApp(db: Db, dataDir: string, webDir?: string) {
   const app = new Hono();
@@ -21,6 +33,7 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
   const emit = (e: ServerEvent) => listeners.forEach((l) => l(e));
 
   app.onError((err, c) => {
+    if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
     console.error(err);
     return c.json({ error: err.message }, 500);
   });
@@ -32,12 +45,20 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
   app.get('/api/characters', (c) => c.json({ characters: db.listCharacters(), waiting: db.openBatches() }));
 
   app.post('/api/characters', async (c) => {
-    const body = await c.req.json<{ slug?: string; name?: string; summary?: string }>();
+    const body = await c.req.json<{ slug?: string; name?: string; summary?: string; brief?: string; preset?: string; profile?: RenderProfile; adult?: boolean }>();
     const slug = (body.slug ?? '').trim().toLowerCase();
     if (!/^[a-z0-9][a-z0-9-]{0,40}$/.test(slug)) return c.json({ error: 'slug: letras minúsculas, números e hífens' }, 400);
     if (!body.name?.trim()) return c.json({ error: 'name is required' }, 400);
     if (db.characterRow(slug)) return c.json({ error: `character ${slug} already exists` }, 409);
-    const ch = db.createCharacter({ slug, name: body.name.trim(), summary: body.summary });
+    const profile = body.profile ?? (body.preset ? PRESETS.find((p) => p.id === body.preset)?.profile : undefined) ?? null;
+    if (body.preset && !profile) return c.json({ error: `unknown preset ${body.preset}` }, 400);
+    if (profile) {
+      const err = validateProfile(profile);
+      if (err) return c.json({ error: err }, 400);
+    }
+    const gates: Record<string, GateMark> = {};
+    if (body.adult && profile) gates.g0 = { status: 'done', at: new Date().toISOString(), by: 'owner', note: 'Adulto confirmado e perfil de geração escolhido na criação.' };
+    const ch = db.createCharacter({ slug, name: body.name.trim(), summary: body.summary, brief: body.brief, profile, gates });
     emit({ type: 'character.updated', slug });
     return c.json(ch, 201);
   });
@@ -49,50 +70,202 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
 
   app.patch('/api/characters/:slug', async (c) => {
     const slug = c.req.param('slug');
-    const body = await c.req.json<{ name?: string; summary?: string; coverItemId?: number }>();
+    const body = await c.req.json<{ name?: string; summary?: string; brief?: string; coverItemId?: number; profile?: RenderProfile | null; preset?: string }>();
+    let profile = body.profile;
+    if (body.preset) {
+      profile = PRESETS.find((p) => p.id === body.preset)?.profile;
+      if (!profile) return c.json({ error: `unknown preset ${body.preset}` }, 400);
+    }
+    if (profile) {
+      const err = validateProfile(profile);
+      if (err) return c.json({ error: err }, 400);
+    }
     let cover: string | undefined;
     if (body.coverItemId) {
       const it = db.itemRow(body.coverItemId);
       if (!it) return c.json({ error: 'item not found' }, 404);
       cover = it.file as string;
     }
-    const ch = db.updateCharacter(slug, { name: body.name, summary: body.summary, cover });
+    const ch = db.updateCharacter(slug, { name: body.name, summary: body.summary, brief: body.brief, cover, profile });
     if (!ch) return c.json({ error: 'not found' }, 404);
     emit({ type: 'character.updated', slug });
     return c.json(ch);
   });
 
+  app.post('/api/characters/:slug/gates/:gate', async (c) => {
+    const slug = c.req.param('slug');
+    const gate = c.req.param('gate');
+    if (!phaseOf(gate)) return c.json({ error: `unknown gate ${gate}` }, 400);
+    const body = await c.req.json<{ status?: 'done' | 'open'; note?: string; by?: 'owner' | 'agent' }>().catch(() => ({}) as { status?: 'done' | 'open'; note?: string; by?: 'owner' | 'agent' });
+    const gates = db.setGate(slug, gate, body.status === 'open' ? null : { status: 'done', at: new Date().toISOString(), by: body.by ?? 'owner', note: body.note });
+    if (!gates) return c.json({ error: 'not found' }, 404);
+    emit({ type: 'character.updated', slug });
+    return c.json(gates);
+  });
+
+  app.get('/api/characters/:slug/next', (c) => {
+    const ch = db.getCharacter(c.req.param('slug'));
+    if (!ch) return c.json({ error: 'not found' }, 404);
+    return c.json(nextStep(ch, db.listJobs({ slug: ch.slug, active: true })));
+  });
+
+  app.get('/api/presets', (c) =>
+    c.json({
+      presets: PRESETS,
+      backends: Object.values(BACKENDS).map((b) => ({ id: b.id, label: b.label, nsfw: b.allowsNsfw({}), unavailableHere: b.unavailable({}) })),
+      worker: workerBackends,
+    }),
+  );
+
+  // ---------- render jobs ----------
+
+  app.get('/api/jobs', (c) => c.json(db.listJobs({ slug: c.req.query('character'), active: c.req.query('active') === '1' })));
+
+  app.post('/api/characters/:slug/jobs', async (c) => {
+    const slug = c.req.param('slug');
+    const ch = db.getCharacter(slug);
+    if (!ch) return c.json({ error: 'not found' }, 404);
+    if (!ch.profile) return c.json({ error: 'this character has no render profile yet' }, 409);
+    const body = await c.req.json<{ phase?: string; kind?: BatchKind; title?: string; group?: string; request?: RenderRequest; fromItem?: number; count?: number }>();
+    let request = body.request;
+    let phase = body.phase;
+    let title = body.title ?? '';
+    if (body.fromItem) {
+      // "more like this": same request as the item that came from a render, new seeds
+      const it = db.itemRow(body.fromItem);
+      const meta = it ? (JSON.parse(it.meta as string) as { request?: RenderRequest }) : null;
+      if (!it || !meta?.request) return c.json({ error: 'this image has no render request to repeat' }, 400);
+      request = { ...meta.request, seed: undefined, count: body.count ?? 4 };
+      phase ??= db.batchSummary(it.batch_id as number)?.phase;
+      title ||= `Variações de ${it.label}`;
+    }
+    if (!request?.prompt?.trim()) return c.json({ error: 'request.prompt is required' }, 400);
+    if (!phase || !phaseOf(phase)) return c.json({ error: 'phase is required (g0..g8)' }, 400);
+    const rating = request.rating === 'nsfw' ? 'nsfw' : 'sfw';
+    let config;
+    try {
+      config = backendFor(ch.profile, rating);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 409);
+    }
+    const job = db.createJob({ characterId: ch.id, phase, kind: body.kind ?? 'review', rating, backend: config.backend, title: title || `Geração ${phase.toUpperCase()}`, group: body.group ?? '', request: { ...request, rating } });
+    emit({ type: 'job.updated', job });
+    kickWorker();
+    return c.json(job, 201);
+  });
+
+  /** Workers (forge worker, or this server) take jobs for the backends they can run. */
+  app.post('/api/jobs/claim', async (c) => {
+    const body = await c.req.json<{ backends?: string[]; worker?: string }>();
+    const job = db.claimJob(body.backends ?? [], body.worker ?? 'worker');
+    if (!job) return c.body(null, 204);
+    emit({ type: 'job.updated', job });
+    const ch = db.getCharacter(job.characterSlug)!;
+    return c.json({ job, config: ch.profile ? backendFor(ch.profile, job.rating) : null });
+  });
+
+  app.post('/api/jobs/:id/complete', async (c) => {
+    const id = Number(c.req.param('id'));
+    const job = db.getJob(id);
+    if (!job) return c.json({ error: 'not found' }, 404);
+    const form = await c.req.parseBody({ all: false });
+    const outputs = JSON.parse(String(form.outputs ?? '[]')) as { field: string; seed?: number; meta?: Record<string, unknown> }[];
+    const batch = await completeJob(job, outputs, formFile(form));
+    return c.json(batch);
+  });
+
+  app.post('/api/jobs/:id/fail', async (c) => {
+    const id = Number(c.req.param('id'));
+    const body = await c.req.json<{ error?: string }>().catch(() => ({ error: '' }));
+    db.finishJob(id, { error: body.error || 'failed' });
+    const job = db.getJob(id);
+    if (job) emit({ type: 'job.updated', job });
+    return c.json(job);
+  });
+
+  async function completeJob(job: Job, outputs: { field: string; seed?: number; meta?: Record<string, unknown> }[], getFile: (f: string) => Promise<Upload | null>) {
+    if (!outputs.length) throw new HttpError(400, 'no outputs');
+    const req = job.request;
+    const batch = await ingest(
+      {
+        character: job.characterSlug, phase: job.phase, kind: job.kind, title: job.title,
+        notes: `Gerado por ${job.backend} (job #${job.id}). Prompt: ${req.prompt.slice(0, 400)}`,
+        items: outputs.map((o, i) => ({
+          file: o.field, label: o.seed !== undefined ? `seed ${o.seed}` : `${job.backend} ${i + 1}`, group: job.group,
+          meta: { ...o.meta, backend: job.backend, rating: job.rating, seed: o.seed, jobId: job.id, request: { ...req, seed: o.seed, count: 1 } },
+        })),
+      },
+      getFile,
+    );
+    db.finishJob(job.id, { batchId: batch.id });
+    emit({ type: 'job.updated', job: db.getJob(job.id)! });
+    return batch;
+  }
+
+  // In-process worker for the backends this server can run itself (CHARFORGE_WORKER_BACKENDS).
+  const workerBackends = (process.env.CHARFORGE_WORKER_BACKENDS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const workerName = `server@${hostname()}`;
+  db.requeueStale(workerName);
+  let working = false;
+  async function kickWorker() {
+    if (working || !workerBackends.length) return;
+    working = true;
+    try {
+      for (let job = db.claimJob(workerBackends, workerName); job; job = db.claimJob(workerBackends, workerName)) {
+        emit({ type: 'job.updated', job });
+        const ch = db.getCharacter(job.characterSlug)!;
+        const dir = await mkdtemp(join(tmpdir(), 'charforge-job-'));
+        try {
+          const req = await localInputs(job.request, dataDir, dir);
+          const outs = await render(backendFor(ch.profile!, job.rating), req, dir, (l) => console.log(`[job ${job!.id}] ${l}`));
+          const files = new Map<string, Upload>();
+          const list = await Promise.all(outs.map(async (o, i) => {
+            files.set(`o${i}`, { name: basename(o.file), data: new Uint8Array(await readFile(o.file)) });
+            return { field: `o${i}`, seed: o.seed, meta: o.meta };
+          }));
+          await completeJob(job, list, async (f) => files.get(f) ?? null);
+        } catch (e) {
+          db.finishJob(job.id, { error: (e as Error).message });
+          emit({ type: 'job.updated', job: db.getJob(job.id)! });
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      working = false;
+    }
+  }
+  if (workerBackends.length) setInterval(kickWorker, 5000).unref();
+
   // ---------- batches ----------
 
-  app.post('/api/batches', async (c) => {
-    const form = await c.req.parseBody({ all: false });
-    const raw = form.manifest;
-    if (typeof raw !== 'string') return c.json({ error: 'manifest field (JSON) is required' }, 400);
-    const m = JSON.parse(raw) as Manifest;
-    const ch = db.characterRow(m.character);
-    if (!ch) return c.json({ error: `character ${m.character} not found (forge char add ${m.character} --name ...)` }, 404);
-    if (!phaseOf(m.phase)) return c.json({ error: `unknown phase ${m.phase} (g0..g8)` }, 400);
-    if (!m.title?.trim()) return c.json({ error: 'title is required' }, 400);
-    if (!Array.isArray(m.items) || !m.items.length) return c.json({ error: 'items is empty' }, 400);
-    const kind = m.kind ?? 'review';
-    if (kind !== 'review' && kind !== 'pick') return c.json({ error: 'kind must be review or pick' }, 400);
+  type Upload = { name: string; data: Uint8Array };
 
-    // store every file first, so a bad upload does not leave a half-created batch
+  /** Store a batch from a manifest; file fields resolve through getFile. Returns the batch or throws. */
+  async function ingest(m: Manifest, getFile: (field: string) => Promise<Upload | null>) {
+    const ch = db.characterRow(m.character);
+    if (!ch) throw new HttpError(404, `character ${m.character} not found (forge char add ${m.character} --name ...)`);
+    if (!phaseOf(m.phase)) throw new HttpError(400, `unknown phase ${m.phase} (g0..g8)`);
+    if (!m.title?.trim()) throw new HttpError(400, 'title is required');
+    if (!Array.isArray(m.items) || !m.items.length) throw new HttpError(400, 'items is empty');
+    const kind = m.kind ?? 'review';
+    if (kind !== 'review' && kind !== 'pick') throw new HttpError(400, 'kind must be review or pick');
+
     const batchId = db.createBatch({ characterId: ch.id, phase: m.phase, kind, title: m.title.trim(), notes: m.notes ?? '', parentId: m.parentId ?? null });
     const rel = `${safeName(ch.slug)}/${batchId}`;
     try {
       const prepared: Parameters<Db['addItem']>[0][] = [];
       for (const [i, it] of m.items.entries()) {
-        const f = form[it.file];
-        if (!(f instanceof File)) throw new Error(`item ${i}: file field ${it.file} missing`);
+        const f = await getFile(it.file);
+        if (!f) throw new Error(`item ${i}: file field ${it.file} missing`);
         const label = it.label?.trim() || f.name.replace(/\.[^.]+$/, '');
         const pos = String(i + 1).padStart(3, '0');
-        const stored = await storeImage(dataDir, rel, `${pos}-${f.name}`, new Uint8Array(await f.arrayBuffer()));
+        const stored = await storeImage(dataDir, rel, `${pos}-${f.name}`, f.data);
         let prevFile: string | null = null;
         if (it.previous) {
-          const p = form[it.previous];
-          if (!(p instanceof File)) throw new Error(`item ${i}: previous field ${it.previous} missing`);
-          prevFile = (await storeImage(dataDir, `${rel}/prev`, `${pos}-${p.name}`, new Uint8Array(await p.arrayBuffer()))).file;
+          const p = await getFile(it.previous);
+          if (!p) throw new Error(`item ${i}: previous field ${it.previous} missing`);
+          prevFile = (await storeImage(dataDir, `${rel}/prev`, `${pos}-${p.name}`, p.data)).file;
         }
         const regions: Region[] = (it.regions ?? []).map((g, j) => ({
           id: g.id ?? `r${j + 1}`, kind: g.kind, label: g.label || g.kind,
@@ -105,7 +278,7 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
       db.tx(() => prepared.forEach((p) => db.addItem(p)));
     } catch (e) {
       db.raw.prepare('DELETE FROM batches WHERE id = ?').run(batchId);
-      return c.json({ error: (e as Error).message }, 400);
+      throw new HttpError(400, (e as Error).message);
     }
     if (!ch.cover) {
       const first = db.raw.prepare('SELECT file FROM items WHERE batch_id = ? ORDER BY position LIMIT 1').get(batchId) as { file: string };
@@ -113,7 +286,18 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
     }
     const batch = db.batchSummary(batchId)!;
     emit({ type: 'batch.created', batch });
-    return c.json(batch, 201);
+    return batch;
+  }
+
+  const formFile = (form: Record<string, unknown>) => async (field: string): Promise<Upload | null> => {
+    const f = form[field];
+    return f instanceof File ? { name: f.name, data: new Uint8Array(await f.arrayBuffer()) } : null;
+  };
+
+  app.post('/api/batches', async (c) => {
+    const form = await c.req.parseBody({ all: false });
+    if (typeof form.manifest !== 'string') return c.json({ error: 'manifest field (JSON) is required' }, 400);
+    return c.json(await ingest(JSON.parse(form.manifest) as Manifest, formFile(form)), 201);
   });
 
   app.get('/api/batches/:id', (c) => {

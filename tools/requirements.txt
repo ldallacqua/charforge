@@ -1,0 +1,6 @@
+# Python tools for the sprite gate (G5). Python 3.10+; run them with `python -I`.
+numpy
+pillow
+scipy
+opencv-python-headless
+rembg[cpu]

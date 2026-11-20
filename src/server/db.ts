@@ -2,8 +2,9 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import type {
-  Batch, BatchDetail, BatchKind, Character, CharacterDetail, Check, Counts, Item, PhaseState, Region, Review,
+  Batch, BatchDetail, BatchKind, Character, CharacterDetail, Check, Counts, GateMark, Item, Job, PhaseState, Region, Review,
 } from '../shared/types.ts';
+import type { RenderProfile, RenderRequest } from '../render/types.ts';
 import { PHASES } from '../shared/phases.ts';
 
 const MIGRATIONS = [
@@ -56,6 +57,28 @@ const MIGRATIONS = [
      note TEXT NOT NULL DEFAULT '',
      updated_at TEXT NOT NULL
    );`,
+  `ALTER TABLE characters ADD COLUMN brief TEXT NOT NULL DEFAULT '';
+   ALTER TABLE characters ADD COLUMN profile TEXT NOT NULL DEFAULT '';
+   ALTER TABLE characters ADD COLUMN gates TEXT NOT NULL DEFAULT '{}';
+   CREATE TABLE jobs (
+     id INTEGER PRIMARY KEY,
+     character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+     phase TEXT NOT NULL,
+     kind TEXT NOT NULL DEFAULT 'review',
+     rating TEXT NOT NULL CHECK (rating IN ('sfw', 'nsfw')),
+     backend TEXT NOT NULL,
+     title TEXT NOT NULL DEFAULT '',
+     grp TEXT NOT NULL DEFAULT '',
+     request TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
+     worker TEXT,
+     error TEXT,
+     batch_id INTEGER REFERENCES batches(id) ON DELETE SET NULL,
+     created_at TEXT NOT NULL,
+     started_at TEXT,
+     finished_at TEXT
+   );
+   CREATE INDEX jobs_status ON jobs(status, id);`,
 ];
 
 export type Db = ReturnType<typeof openDb>;
@@ -142,28 +165,39 @@ export function openDb(path: string) {
 
   const batchSelect = `SELECT b.*, c.slug, c.name FROM batches b JOIN characters c ON c.id = b.character_id`;
 
-  function phaseStates(characterId: number): Record<string, PhaseState> {
+  /** done: signed off (explicit); waiting: a batch waits for the owner; active: work in progress; idle: not started */
+  function phaseStates(characterId: number, gates: Record<string, GateMark>): Record<string, PhaseState> {
     const out: Record<string, PhaseState> = {};
-    for (const p of PHASES) out[p.id] = 'idle';
     const rows = db.prepare('SELECT id, phase, status FROM batches WHERE character_id = ? ORDER BY id').all(characterId) as Row[];
+    const jobs = db.prepare(`SELECT phase FROM jobs WHERE character_id = ? AND status IN ('queued', 'running')`).all(characterId) as Row[];
     for (const p of PHASES) {
       const mine = rows.filter((r) => r.phase === p.id);
-      if (!mine.length) continue;
-      if (mine.some((r) => r.status === 'open')) { out[p.id] = 'waiting'; continue; }
-      const last = mine[mine.length - 1];
-      const c = counts(last.id);
-      out[p.id] = c.rejected === 0 && c.pending === 0 ? 'done' : 'active';
+      if (gates[p.id]?.status === 'done') out[p.id] = 'done';
+      else if (mine.some((r) => r.status === 'open')) out[p.id] = 'waiting';
+      else if (mine.length || jobs.some((j) => j.phase === p.id)) out[p.id] = 'active';
+      else out[p.id] = 'idle';
     }
     return out;
   }
 
   function toCharacter(r: Row): Character {
     const open = (db.prepare(`SELECT COUNT(*) AS n FROM batches WHERE character_id = ? AND status = 'open'`).get(r.id) as Row).n;
+    const gates = json<Record<string, GateMark>>(r.gates, {});
     return {
-      id: r.id, slug: r.slug, name: r.name, summary: r.summary, coverUrl: r.cover ? fileUrl(r.cover) : null,
-      createdAt: r.created_at, openBatches: Number(open), phases: phaseStates(r.id),
+      id: r.id, slug: r.slug, name: r.name, summary: r.summary, brief: r.brief ?? '', coverUrl: r.cover ? fileUrl(r.cover) : null,
+      createdAt: r.created_at, openBatches: Number(open), phases: phaseStates(r.id, gates), gates,
+      profile: r.profile ? (JSON.parse(r.profile) as RenderProfile) : null,
     };
   }
+
+  function toJob(r: Row): Job {
+    return {
+      id: r.id, characterSlug: r.slug, phase: r.phase, kind: r.kind, rating: r.rating, backend: r.backend, title: r.title, group: r.grp,
+      request: json<RenderRequest>(r.request, { prompt: '', rating: 'sfw' }), status: r.status, worker: r.worker ?? null, error: r.error ?? null,
+      batchId: r.batch_id ?? null, createdAt: r.created_at, startedAt: r.started_at ?? null, finishedAt: r.finished_at ?? null,
+    };
+  }
+  const jobSelect = `SELECT j.*, c.slug FROM jobs j JOIN characters c ON c.id = j.character_id`;
 
   // ---------- queries ----------
 
@@ -186,18 +220,72 @@ export function openDb(path: string) {
       return { ...toCharacter(r), batches };
     },
 
-    createCharacter(input: { slug: string; name: string; summary?: string }): Character {
-      db.prepare('INSERT INTO characters (slug, name, summary, created_at) VALUES (?, ?, ?, ?)')
-        .run(input.slug, input.name, input.summary ?? '', now());
+    createCharacter(input: { slug: string; name: string; summary?: string; brief?: string; profile?: RenderProfile | null; gates?: Record<string, GateMark> }): Character {
+      db.prepare('INSERT INTO characters (slug, name, summary, brief, profile, gates, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(input.slug, input.name, input.summary ?? '', input.brief ?? '', input.profile ? JSON.stringify(input.profile) : '', JSON.stringify(input.gates ?? {}), now());
       return toCharacter(db.prepare('SELECT * FROM characters WHERE slug = ?').get(input.slug) as Row);
     },
 
-    updateCharacter(slug: string, patch: { name?: string; summary?: string; cover?: string | null }) {
+    updateCharacter(slug: string, patch: { name?: string; summary?: string; brief?: string; cover?: string | null; profile?: RenderProfile | null }) {
       const r = db.prepare('SELECT * FROM characters WHERE slug = ?').get(slug) as Row | undefined;
       if (!r) return null;
-      db.prepare('UPDATE characters SET name = ?, summary = ?, cover = ? WHERE id = ?')
-        .run(patch.name ?? r.name, patch.summary ?? r.summary, patch.cover === undefined ? r.cover : patch.cover, r.id);
+      db.prepare('UPDATE characters SET name = ?, summary = ?, brief = ?, cover = ?, profile = ? WHERE id = ?')
+        .run(patch.name ?? r.name, patch.summary ?? r.summary, patch.brief ?? r.brief, patch.cover === undefined ? r.cover : patch.cover,
+          patch.profile === undefined ? r.profile : patch.profile ? JSON.stringify(patch.profile) : '', r.id);
       return toCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(r.id) as Row);
+    },
+
+    setGate(slug: string, gate: string, mark: GateMark | null) {
+      const r = db.prepare('SELECT id, gates FROM characters WHERE slug = ?').get(slug) as Row | undefined;
+      if (!r) return null;
+      const gates = json<Record<string, GateMark>>(r.gates, {});
+      if (mark) gates[gate] = mark;
+      else delete gates[gate];
+      db.prepare('UPDATE characters SET gates = ? WHERE id = ?').run(JSON.stringify(gates), r.id);
+      return gates;
+    },
+
+    // ---------- render jobs ----------
+
+    createJob(input: { characterId: number; phase: string; kind: BatchKind; rating: string; backend: string; title: string; group: string; request: RenderRequest }): Job {
+      const res = db.prepare(`INSERT INTO jobs (character_id, phase, kind, rating, backend, title, grp, request, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.characterId, input.phase, input.kind, input.rating, input.backend, input.title, input.group, JSON.stringify(input.request), now());
+      return toJob(db.prepare(`${jobSelect} WHERE j.id = ?`).get(Number(res.lastInsertRowid)) as Row);
+    },
+
+    getJob(id: number): Job | null {
+      const r = db.prepare(`${jobSelect} WHERE j.id = ?`).get(id) as Row | undefined;
+      return r ? toJob(r) : null;
+    },
+
+    listJobs(filter: { slug?: string; active?: boolean } = {}): Job[] {
+      const where: string[] = [];
+      const args: (string | number)[] = [];
+      if (filter.slug) { where.push('c.slug = ?'); args.push(filter.slug); }
+      if (filter.active) where.push(`j.status IN ('queued', 'running')`);
+      const sql = `${jobSelect} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY j.id DESC LIMIT 100`;
+      return (db.prepare(sql).all(...args) as Row[]).map(toJob);
+    },
+
+    /** Atomically hand the oldest queued job for one of these backends to a worker. */
+    claimJob(backends: string[], worker: string): Job | null {
+      if (!backends.length) return null;
+      return tx(() => {
+        const r = db.prepare(`SELECT id FROM jobs WHERE status = 'queued' AND backend IN (${backends.map(() => '?').join(',')}) ORDER BY id LIMIT 1`).get(...backends) as Row | undefined;
+        if (!r) return null;
+        db.prepare(`UPDATE jobs SET status = 'running', worker = ?, started_at = ? WHERE id = ?`).run(worker, now(), r.id);
+        return toJob(db.prepare(`${jobSelect} WHERE j.id = ?`).get(r.id) as Row);
+      });
+    },
+
+    finishJob(id: number, result: { batchId?: number; error?: string }) {
+      db.prepare(`UPDATE jobs SET status = ?, error = ?, batch_id = ?, finished_at = ? WHERE id = ?`)
+        .run(result.error ? 'failed' : 'done', result.error ?? null, result.batchId ?? null, now(), id);
+    },
+
+    /** Jobs left running by a worker that died (server restart) go back to the queue. */
+    requeueStale(worker: string) {
+      db.prepare(`UPDATE jobs SET status = 'queued', worker = NULL, started_at = NULL WHERE status = 'running' AND worker = ?`).run(worker);
     },
 
     openBatches(): Batch[] {

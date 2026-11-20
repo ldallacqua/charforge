@@ -1,22 +1,36 @@
 #!/usr/bin/env -S node --disable-warning=ExperimentalWarning
-// forge: the agent's side of the studio. Submit images for review, wait for the owner, read the verdicts.
+// forge: the agent's side of the studio. Works the same for any agent (Claude, Codex, Gemini...) and lets
+// any of them resume a character from its state alone.
 //
+//   forge next <slug> [--json]                what to do now, for the agent and for the owner
 //   forge status [--char <slug>]
-//   forge char add <slug> --name <name> [--summary <text>]
+//   forge char add <slug> --name <name> [--brief <text|@file>] [--preset <id>] [--adult]
+//   forge char brief <slug> <text|@file>
 //   forge char cover <slug> <itemId>
+//   forge profile <slug> [--preset <id>] [--sfw <backend>] [--nsfw <backend|none>] [--sfw-opt k=v]... [--nsfw-opt k=v]...
+//   forge render --char <slug> --rating sfw|nsfw --prompt <text|@file> [--negative ...] [--n 4] [--size 768x1344]
+//                [--seed N] [--init img] [--denoise 0.5] [--ref img]... [--transparent] [--opt k=v]... [--out dir]
+//                [--submit --phase g2 --title "..." [--group ...] [--kind review|pick]]
 //   forge submit --char <slug> --phase g5 --title "..." [--kind review|pick] [--notes <text|@file>]
 //                [--parent <batchId>] (--manifest <file.json> | <image> ...)
-//   forge wait <batchId> [--timeout <seconds>]
+//   forge wait <batchId> [--timeout <seconds>] [--json]
 //   forge verdicts <batchId> [--json]
+//   forge gate <slug> <g0..g8> done|open [--note <text>]
+//   forge worker [--backends codex,comfyui] [--once]    run queued render jobs on this machine
 //   forge serve
 //
-// FORGE_URL (default http://127.0.0.1:8787) points at the studio.
+// FORGE_URL (default http://127.0.0.1:8787) points at the studio. Backend settings come from the
+// environment: COMFYUI_URL, OPENAI_API_KEY, CODEX_BIN (see docs/RENDERING.md).
 
 import { openAsBlob } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import type { Batch, CharacterDetail, Character, Manifest, ManifestItem } from '../src/shared/types.ts';
+import type { Batch, CharacterDetail, Character, Job, Manifest, ManifestItem, NextStep } from '../src/shared/types.ts';
+import { availableBackends, render as renderWith, type BackendConfig, type RenderRequest } from '../src/render/index.ts';
+import { localInputs } from '../src/render/inputs.ts';
+import { PHASES } from '../src/shared/phases.ts';
 import type { VerdictExport } from '../src/server/verdicts.ts';
 
 const BASE = (process.env.FORGE_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '');
@@ -53,17 +67,160 @@ async function status(argv: string[]) {
   for (const b of waiting) console.log(`  #${b.id} ${b.characterSlug} ${b.phase} r${b.round} ${b.title} — ${bar(b.counts)}`);
 }
 
+const text = async (v: string) => (v.startsWith('@') ? readFile(resolve(v.slice(1)), 'utf8') : v);
+
 async function char(argv: string[]) {
   const [sub, slug, ...rest] = argv;
   if (sub === 'add') {
-    const { values } = parseArgs({ args: rest, options: { name: { type: 'string' }, summary: { type: 'string' } } });
-    const ch = await api<Character>('/api/characters', json({ slug, name: values.name ?? slug, summary: values.summary ?? '' }));
-    console.log(`created ${ch.slug}`);
+    const { values } = parseArgs({ args: rest, options: { name: { type: 'string' }, summary: { type: 'string' }, brief: { type: 'string' }, preset: { type: 'string' }, adult: { type: 'boolean' } } });
+    const ch = await api<Character>('/api/characters', json({ slug, name: values.name ?? slug, summary: values.summary ?? '', brief: values.brief ? await text(values.brief) : '', preset: values.preset, adult: values.adult }));
+    console.log(`created ${ch.slug}${ch.profile ? ` (SFW: ${ch.profile.sfw.backend}, NSFW: ${ch.profile.nsfw?.backend ?? 'none'})` : ''}`);
+  } else if (sub === 'brief') {
+    await api(`/api/characters/${slug}`, { ...json({ brief: await text(rest.join(' ')) }), method: 'PATCH' });
+    console.log(`brief of ${slug} saved`);
   } else if (sub === 'cover') {
     await api(`/api/characters/${slug}`, { ...json({ coverItemId: Number(rest[0]) }), method: 'PATCH' });
     console.log(`cover of ${slug} set to item ${rest[0]}`);
   } else {
-    throw new Error('usage: forge char add <slug> --name <name> | forge char cover <slug> <itemId>');
+    throw new Error('usage: forge char add <slug> --name <name> [--brief ...] [--preset ...] [--adult] | char brief <slug> <text|@file> | char cover <slug> <itemId>');
+  }
+}
+
+/** k=v pairs; values are JSON when they parse (numbers, booleans, arrays), text otherwise. */
+function kv(pairs: string[] = []): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const p of pairs) {
+    const i = p.indexOf('=');
+    if (i < 1) throw new Error(`expected key=value, got ${p}`);
+    const raw = p.slice(i + 1);
+    try {
+      o[p.slice(0, i)] = JSON.parse(raw);
+    } catch {
+      o[p.slice(0, i)] = raw;
+    }
+  }
+  return o;
+}
+
+async function profile(argv: string[]) {
+  const { values, positionals } = parseArgs({
+    args: argv, allowPositionals: true,
+    options: { preset: { type: 'string' }, sfw: { type: 'string' }, nsfw: { type: 'string' }, 'sfw-opt': { type: 'string', multiple: true }, 'nsfw-opt': { type: 'string', multiple: true } },
+  });
+  const slug = positionals[0];
+  const ch = await api<CharacterDetail>(`/api/characters/${slug}`);
+  let body: Record<string, unknown>;
+  if (values.preset) body = { preset: values.preset };
+  else {
+    const cur = ch.profile ?? { sfw: { backend: 'comfyui' as const }, nsfw: null };
+    const sfw = { backend: (values.sfw ?? cur.sfw.backend) as BackendConfig['backend'], options: { ...(values.sfw && values.sfw !== cur.sfw.backend ? {} : cur.sfw.options), ...kv(values['sfw-opt']) } };
+    const nsfwName = values.nsfw ?? cur.nsfw?.backend ?? 'none';
+    const nsfw = nsfwName === 'none' ? null : { backend: nsfwName as BackendConfig['backend'], options: { ...(values.nsfw && values.nsfw !== cur.nsfw?.backend ? {} : cur.nsfw?.options), ...kv(values['nsfw-opt']) } };
+    body = { profile: { sfw, nsfw } };
+  }
+  const out = await api<Character>(`/api/characters/${slug}`, { ...json(body), method: 'PATCH' });
+  console.log(JSON.stringify(out.profile, null, 2));
+}
+
+async function renderCmd(argv: string[]) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      char: { type: 'string' }, rating: { type: 'string' }, prompt: { type: 'string' }, negative: { type: 'string' }, n: { type: 'string' },
+      size: { type: 'string' }, seed: { type: 'string' }, init: { type: 'string' }, denoise: { type: 'string' }, ref: { type: 'string', multiple: true },
+      transparent: { type: 'boolean' }, opt: { type: 'string', multiple: true }, out: { type: 'string' }, backend: { type: 'string' },
+      submit: { type: 'boolean' }, phase: { type: 'string' }, title: { type: 'string' }, group: { type: 'string' }, kind: { type: 'string' }, notes: { type: 'string' },
+    },
+  });
+  if (!values.prompt) throw new Error('--prompt is required');
+  const rating = values.rating === 'nsfw' ? 'nsfw' : 'sfw';
+  let config: BackendConfig;
+  if (values.backend) config = { backend: values.backend as BackendConfig['backend'] };
+  else {
+    if (!values.char) throw new Error('--char (to use its profile) or --backend is required');
+    const ch = await api<CharacterDetail>(`/api/characters/${values.char}`);
+    if (!ch.profile) throw new Error(`${values.char} has no render profile: forge profile ${values.char} --preset ...`);
+    const c = ch.profile[rating];
+    if (!c) throw new Error(`${values.char} has no ${rating.toUpperCase()} backend`);
+    config = c;
+  }
+  const [w, h] = (values.size ?? '').split('x').map(Number);
+  const req: RenderRequest = {
+    prompt: await text(values.prompt), negative: values.negative, rating,
+    width: w || undefined, height: h || undefined, count: Number(values.n ?? 1), seed: values.seed ? Number(values.seed) : undefined,
+    init: values.init ? resolve(values.init) : undefined, denoise: values.denoise ? Number(values.denoise) : undefined,
+    references: values.ref?.map((r) => resolve(r)), transparent: values.transparent, options: kv(values.opt),
+  };
+  const out = resolve(values.out ?? join('renders', `${Date.now()}`));
+  const t0 = Date.now();
+  const outputs = await renderWith(config, req, out, (l) => console.error(l));
+  await writeFile(join(out, 'render.json'), JSON.stringify({ config: { backend: config.backend }, request: req, outputs }, null, 2));
+  console.error(`${outputs.length} image(s) from ${config.backend} in ${Math.round((Date.now() - t0) / 1000)}s -> ${out}`);
+  if (!values.submit) {
+    for (const o of outputs) console.log(o.file);
+    return;
+  }
+  if (!values.char || !values.phase || !values.title) throw new Error('--submit needs --char, --phase and --title');
+  const manifest = {
+    character: values.char, phase: values.phase, kind: values.kind ?? 'review', title: values.title, notes: values.notes ? await text(values.notes) : '',
+    items: outputs.map((o, i) => ({ file: o.file, label: o.seed !== undefined ? `seed ${o.seed}` : `${o.backend} ${i + 1}`, group: values.group, meta: { ...o.meta, backend: o.backend, rating, seed: o.seed, request: { ...req, seed: o.seed, count: 1 } } })),
+  };
+  const mf = join(out, 'manifest.json');
+  await writeFile(mf, JSON.stringify(manifest, null, 2));
+  await submit(['--manifest', mf]);
+}
+
+async function gate(argv: string[]) {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { note: { type: 'string' } } });
+  const [slug, g, status] = positionals;
+  if (!PHASES.some((p) => p.id === g) || (status !== 'done' && status !== 'open')) throw new Error('usage: forge gate <slug> <g0..g8> done|open [--note ...]');
+  await api(`/api/characters/${slug}/gates/${g}`, json({ status, note: values.note, by: 'agent' }));
+  console.log(`${slug} ${g} ${status}`);
+}
+
+async function next(argv: string[]) {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean' } } });
+  const n = await api<NextStep>(`/api/characters/${positionals[0]}/next`);
+  if (values.json) return console.log(JSON.stringify(n, null, 2));
+  const ph = PHASES.find((p) => p.id === n.gate);
+  console.log(`${positionals[0]}: ${ph ? `G${ph.gate} ${ph.label}` : 'all gates done'} (${n.state})`);
+  if (n.agent) console.log(`\nagent: ${n.agent}`);
+  if (n.owner) console.log(`\nowner: ${n.owner}`);
+  if (n.commands.length) console.log(`\n${n.commands.map((c) => `  ${c}`).join('\n')}`);
+}
+
+async function worker(argv: string[]) {
+  const { values } = parseArgs({ args: argv, options: { backends: { type: 'string' }, once: { type: 'boolean' }, name: { type: 'string' } } });
+  const backends = values.backends ? values.backends.split(',') : availableBackends();
+  const name = values.name ?? `forge@${hostname()}`;
+  if (!backends.length) throw new Error('no backend available here (set COMFYUI_URL, OPENAI_API_KEY or install the Codex CLI)');
+  console.error(`worker ${name}: ${backends.join(', ')}`);
+  for (;;) {
+    const res = await fetch(`${BASE}/api/jobs/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ backends, worker: name }) });
+    if (res.status === 204) {
+      if (values.once) return;
+      await new Promise((r) => setTimeout(r, 5000));
+      continue;
+    }
+    if (!res.ok) throw new Error(`claim failed: HTTP ${res.status}`);
+    const { job, config } = (await res.json()) as { job: Job; config: BackendConfig };
+    console.error(`job #${job.id}: ${job.backend} ${job.rating} x${job.request.count ?? 1} for ${job.characterSlug}`);
+    const dir = await mkdtemp(join(tmpdir(), 'charforge-worker-'));
+    try {
+      const req = await localInputs(job.request, BASE, dir);
+      const outs = await renderWith(config, req, dir, (l) => console.error(`  ${l}`));
+      const fd = new FormData();
+      for (const [i, o] of outs.entries()) fd.append(`o${i}`, await openAsBlob(o.file), basename(o.file));
+      fd.append('outputs', JSON.stringify(outs.map((o, i) => ({ field: `o${i}`, seed: o.seed, meta: o.meta }))));
+      const b = await api<Batch>(`/api/jobs/${job.id}/complete`, { method: 'POST', body: fd });
+      console.error(`  -> batch #${b.id}`);
+    } catch (e) {
+      console.error(`  failed: ${(e as Error).message}`);
+      await api(`/api/jobs/${job.id}/fail`, json({ error: (e as Error).message }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+    if (values.once) return;
   }
 }
 
@@ -168,12 +325,12 @@ async function wait(argv: string[]) {
 
 const [cmd, ...rest] = process.argv.slice(2);
 const commands: Record<string, (a: string[]) => Promise<void>> = {
-  status, char, submit, verdicts, wait,
+  next, status, char, profile, render: renderCmd, submit, verdicts, wait, gate, worker,
   serve: async () => void (await import('../src/server/main.ts')),
 };
 const run = commands[cmd ?? ''];
 if (!run) {
-  console.log('usage: forge status | char add|cover | submit | wait <id> | verdicts <id> [--json] | serve');
+  console.log('usage: forge next <slug> | status | char add|brief|cover | profile | render | submit | wait <id> | verdicts <id> | gate | worker | serve\n(see the header of bin/forge.ts or AGENTS.md)');
   process.exit(cmd ? 1 : 0);
 }
 run(rest).catch((e: Error) => {

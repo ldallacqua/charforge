@@ -1,0 +1,7 @@
+node_modules
+dist
+data
+renders
+.git
+.claude
+*.log

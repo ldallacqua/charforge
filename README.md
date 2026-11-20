@@ -1,103 +1,114 @@
 # Charforge
 
-Estúdio de personagens com IA. O agente (Claude) gera as imagens de cada fase do personagem; o dono
-revisa cada imagem de perto e dá o veredito com motivos clicáveis. O agente lê os vereditos e sabe
-exatamente o que corrigir na próxima rodada.
+Estúdio de personagens com IA. Um agente (Claude, Codex, Gemini, qualquer um) faz o trabalho: escreve o
+card, gera as imagens, treina a LoRA, monta as sprites. Você revisa cada imagem de perto, aprova ou recusa
+com motivos clicáveis, e o agente corrige exatamente o que foi recusado.
 
 A revisão humana era o gargalo: o agente produz rápido, mas deixa passar mão com dedo a mais, olho
-torto, sobra de fundo no recorte. Aqui a revisão vira uma tela feita para isso, e o resultado vira
-dado estruturado em vez de conversa.
+torto, sobra de fundo no recorte. Aqui a revisão vira uma tela feita para isso, e a sua opinião vira dado
+estruturado que o agente lê.
 
 ## Como funciona
 
 ```
- agente                              estúdio                              dono
- ──────                              ───────                              ────
- gera as imagens da fase
- roda o QA automático
- forge submit  ───────────────────▶  lote "esperando você"  ───────────▶  revisa: lupas, zoom,
-                                                                           antes e depois, fundos
- forge wait    ◀───────────────────  vereditos + plano de    ◀──────────  aprova ou recusa com
- corrige o que foi recusado          correção                              motivos e marcações
- forge submit --parent  ──────────▶  rodada 2 (só as recusadas) ...
+ você                                  estúdio                               agente
+ ────                                  ───────                               ──────
+ cria o personagem: brief,       ─▶   personagem + perfil de geração   ─▶   forge next: o que fazer agora
+ adulto, como gerar as imagens
+                                                                            gera (GPU, API ou CLI), confere
+ revisa: lupas, zoom, antes e    ◀─   lote "esperando você"           ◀─   forge submit
+ depois, fundos; gostei/não
+ gostei, aprova/recusa + motivo  ─▶   vereditos + plano de correção   ─▶   forge wait / verdicts
+                                                                            corrige só o recusado, rodada 2
+ conclui a fase                  ─▶   G0 … G8
 ```
 
-- **Lote**: um conjunto de imagens de uma fase (G0 a G8, os mesmos portões do guia de QA).
-  Dois tipos: **revisão** (cada imagem aprovada ou recusada) e **escolha** (várias candidatas para
-  a mesma coisa, como 8 seeds de uma mão; o dono escolhe uma).
-- **Lupas**: regiões que o agente marca para inspeção de perto (mãos, olhos, rosto, pés, chifres,
-  asas, bordas). Cada lupa tem seu próprio veredito. Ao trocar de imagem, a lupa continua na mesma
-  região: dá para conferir a mesma mão nas 5 expressões de uma pose em segundos.
-- **Marcações**: o dono circula qualquer ponto da imagem (tecla P, ou Shift + arrastar) e diz o motivo.
-  O agente recebe as coordenadas em pixels.
-- **Motivos**: um vocabulário fixo ([`src/shared/taxonomy.ts`](src/shared/taxonomy.ts)), cada um com a
-  correção que o agente deve aplicar. Aprovação também tem motivos ("excelente", "usar como referência").
-- **Plano de correção**: ao enviar a revisão, os motivos são agrupados e ordenados pela frequência.
-  É por onde o agente começa.
+**As fases** (G0 a G8): brief e idade, card, design (descoberta e âncoras), dataset, LoRA, sprites,
+cenários e CGs, integração, aprovação. O passo a passo completo está no [playbook](docs/PLAYBOOK.md).
 
-## Tela de revisão
+**Descoberta (G2).** Você escreve o brief; o agente volta com 8 a 12 conceitos bem diferentes de corpo
+inteiro. Você marca "gostei" e diz do quê (rosto, cabelo, roupa, cores, silhueta, acessórios, clima,
+estilo). A próxima rodada junta as partes escolhidas, até você escolher um design.
+
+**Geração intercambiável.** Ao criar o personagem você escolhe como as imagens são geradas, e dá para
+trocar depois:
+
+| Perfil | SFW | NSFW |
+|---|---|---|
+| Tudo na GPU local | ComfyUI na sua placa | ComfyUI na sua placa |
+| ChatGPT para SFW, GPU para NSFW | Codex CLI com o seu plano do ChatGPT (sem chave de API) | ComfyUI |
+| API da OpenAI para SFW, GPU para NSFW | API de imagens (cobrada por imagem) | ComfyUI |
+| Só SFW, pelo ChatGPT | Codex CLI | nenhum |
+
+NSFW só sai da GPU local; o estúdio recusa mandar NSFW para um serviço na nuvem. Detalhes em
+[docs/RENDERING.md](docs/RENDERING.md).
+
+**Retomar de qualquer ponto.** Todo o estado (brief, perfil, lotes, vereditos, fases) fica no estúdio.
+Qualquer agente, de qualquer provedor, continua o trabalho com `forge next <personagem>`. As instruções
+para agentes estão em [AGENTS.md](AGENTS.md).
+
+## A tela de revisão
 
 | Recurso | Para quê |
 |---|---|
+| Lupas nas regiões que o agente marca (mãos, olhos, rosto, pés, chifres, asas, cauda, bordas) | cada uma com veredito próprio; ao trocar de imagem a lupa fica na mesma região, para comparar a mesma mão nas 5 expressões |
 | Zoom com roda ou pinça, duplo clique para pixel real | contar dedos com 400 px ou mais por mão |
 | Fundos: xadrez, cinza neutro, escuro, claro, magenta, alfa | halo aparece no escuro, sobra de fundo salta no magenta, o alfa mostra o recorte puro |
-| Antes e depois (tecla C), com divisória arrastável | toda correção é comparada com a rodada anterior |
-| Tira de contato com marcas de lápis | ver de relance o que já foi decidido |
-| Verificações automáticas na imagem | o resultado do `qa_sprites.py` aparece junto, com o que foi aceito |
-| Atualização ao vivo | um lote novo aparece na hora, com aviso |
-| Funciona no celular | revisar pelo telefone |
+| Antes e depois (tecla C), com divisória arrastável | toda correção comparada com a rodada anterior |
+| Marcações (P, ou Shift + arrastar) | circular o ponto exato; o agente recebe as coordenadas |
+| Modo escolha | candidatas lado a lado com o mesmo zoom; recusa com motivo direto em cada imagem |
+| "Gerar mais 4 parecidas" | o mesmo pedido com sementes novas, direto do estúdio |
+| Atualização ao vivo, funciona no celular | revisar de qualquer lugar |
 
-Atalhos: `A` aprova e vai para a próxima pendente, `R` recusa, `1`–`9` amplia a região, `Tab` próxima
-região, `O` região OK, `C` compara, `B` troca o fundo, `P` marca um ponto, `?` mostra todos.
+Atalhos: `A` aprova, `R` recusa, `1`–`9` amplia a região, `Tab` próxima região, `O` região OK, `C`
+compara, `B` troca o fundo, `P` marca um ponto, `?` mostra todos.
 
 ## Rodar
 
-Requer Node 24 (TypeScript roda direto, sem build no servidor) e pnpm.
+Requer Node 24 e pnpm.
 
 ```bash
 pnpm install
-pnpm build        # interface
-pnpm start        # http://127.0.0.1:8787
+pnpm build
+pnpm start                         # http://127.0.0.1:8787
 ```
 
-Desenvolvimento com recarga: `pnpm dev` (interface em http://localhost:5180).
+Com Docker: `docker compose up -d` (veja `compose.yaml`). Desenvolvimento: `pnpm dev`
+(http://localhost:5180).
 
-Variáveis: `PORT` (8787), `HOST` (127.0.0.1), `CHARFORGE_DATA` (`./data`).
+| Variável | Para quê |
+|---|---|
+| `PORT`, `HOST`, `CHARFORGE_DATA` | porta (8787), endereço (127.0.0.1) e pasta de dados (`./data`) |
+| `COMFYUI_URL` | a sua GPU local (ComfyUI) |
+| `OPENAI_API_KEY` | a API de imagens da OpenAI (só no ambiente, nunca no estúdio) |
+| `CODEX_BIN` | o Codex CLI, se não for achado sozinho |
+| `CHARFORGE_WORKER_BACKENDS` | backends que o próprio servidor roda (ex.: `comfyui,openai`) |
 
-## Lado do agente: `forge`
-
-```bash
-pnpm forge char add rin --name Rin --summary "..."
-pnpm forge submit --manifest lote.json          # ou: --char rin --phase g5 --title "..." imagens...
-pnpm forge wait 12                              # bloqueia até o dono enviar a revisão
-pnpm forge verdicts 12 --json                   # vereditos, motivos com a correção, plano
-pnpm forge status
-```
-
-`FORGE_URL` aponta para o estúdio (padrão `http://127.0.0.1:8787`), então o agente pode enviar de
-outra máquina. O formato do manifesto e as regras do ciclo estão em [AGENTS.md](AGENTS.md).
+O Codex CLI roda na máquina onde está instalado: lá, `pnpm forge worker` pega os pedidos de geração.
 
 ## Dados
 
-Tudo fica em `data/` (banco SQLite e as imagens, que podem ser NSFW). **Nunca vai para o Git.**
-Para backup, copie a pasta com o servidor parado.
+Tudo fica em `data/` (banco SQLite e as imagens, que podem ser NSFW). **Nunca vai para o Git.** Para
+backup, copie a pasta com o servidor parado.
 
-## Arquitetura
+## Por dentro
 
 | Parte | Tecnologia |
 |---|---|
-| Servidor | Node 24, Hono, `node:sqlite`, sharp (miniaturas WebP) |
+| Servidor | Node 24 (TypeScript nativo), Hono, `node:sqlite`, sharp |
 | Interface | React 19, React Router, TanStack Query, Tailwind 4, fonte Archivo (eixo de largura) |
-| Ao vivo | Server-Sent Events (`/api/events`) |
+| Geração | `src/render/`: ComfyUI, OpenAI, Codex CLI, comando local; fila de jobs com workers |
+| Ferramentas | Python em `tools/`: QA de sprites, folhas ampliadas, recorte |
 | Testes | Vitest (`pnpm test`), tipos com `pnpm typecheck` |
 
-Visual: sala de revisão de arte. O fundo é cinza neutro de verdade (sem tom) para não enviesar a
-leitura de cor; as únicas cores fortes são as marcas de lápis (vermelho recusa, verde aprova) e o
-âmbar do que está em foco. As regiões aparecem como marcas de corte de gráfica.
+Visual: sala de revisão de arte. O fundo é cinza neutro de verdade, para não enviesar a leitura de cor;
+as únicas cores fortes são as marcas de lápis (vermelho recusa, verde aprova) e o âmbar do que está em
+foco. As regiões aparecem como marcas de corte de gráfica.
 
-## Próximos passos
+## Documentação
 
-- Rodar como serviço do homelab (Docker + Tailscale) para revisar de qualquer lugar.
-- Detecção automática de mãos, rostos e pés (YOLO do Impact Pack na 4090) para criar as lupas sozinho.
-- Mover o pipeline de geração (`sillytavern/charforge`) para cá, generalizado para qualquer personagem.
-- Sprites mestre de corpo inteiro: a revisão de pés já está no vocabulário.
+- [AGENTS.md](AGENTS.md): instruções para qualquer agente (comece por aqui se você é um)
+- [docs/PLAYBOOK.md](docs/PLAYBOOK.md): o processo completo, fase a fase
+- [docs/RENDERING.md](docs/RENDERING.md): backends, perfis, workers, resolução e transparência
+- [docs/MODELS.md](docs/MODELS.md): modelos e licenças
+- [docs/SILLYTAVERN.md](docs/SILLYTAVERN.md): instalar o personagem no SillyTavern

@@ -20,6 +20,20 @@ export interface Area {
 
 export const AREAS: Area[] = [
   {
+    id: 'concept',
+    label: 'Conceito',
+    kinds: [],
+    reasons: [
+      { code: 'concept.off_brief', label: 'Fora do que pedi', fix: 'Re-read the brief and the owner notes; the next round must change what the owner named, not just the seed.' },
+      { code: 'concept.generic', label: 'Genérico demais', fix: 'Push one distinctive idea (silhouette, accessory, palette) instead of a safe average; give the next options real variety.' },
+      { code: 'concept.silhouette', label: 'Silhueta fraca', fix: 'Make the outline readable in black: bigger shapes (horns, hair mass, sleeves, wings), less noise inside.' },
+      { code: 'concept.palette', label: 'Cores não combinam', fix: 'Try 2-3 palettes on the liked design (same line art) before redesigning.' },
+      { code: 'concept.busy', label: 'Detalhe demais', fix: 'Remove small ornaments: fine detail does not survive the local model or the LoRA (lesson from Rin). Keep 3-5 strong anchors.' },
+      { code: 'concept.style', label: 'Estilo não é esse', fix: 'Wrong rendering style: match the style reference or switch the model / style LoRA for the next options.' },
+      { code: 'concept.young', label: 'Parece jovem demais', fix: 'Adult proportions and face: "mature female, adult", taller, longer face, and the age negatives. Never submit an ambiguous one again.' },
+    ],
+  },
+  {
     id: 'hands',
     label: 'Mãos',
     kinds: ['hand'],
@@ -134,6 +148,18 @@ export const AREAS: Area[] = [
   },
 ];
 
+/** Discovery (G2): what the owner liked in a concept, so the next round can combine the liked parts. */
+export const LIKES: Reason[] = [
+  { code: 'like.face', label: 'Rosto', fix: 'Keep this face (shape, eyes, expression range) in the next round.' },
+  { code: 'like.hair', label: 'Cabelo', fix: 'Keep this hairstyle and hair colour.' },
+  { code: 'like.outfit', label: 'Roupa', fix: 'Keep this outfit design.' },
+  { code: 'like.palette', label: 'Cores', fix: 'Keep this palette (note the hex values).' },
+  { code: 'like.silhouette', label: 'Silhueta', fix: 'Keep this silhouette and proportions.' },
+  { code: 'like.accessories', label: 'Acessórios', fix: 'Keep these accessories (horns, jewellery, props).' },
+  { code: 'like.vibe', label: 'Clima', fix: 'Keep the mood: expression, pose attitude, lighting.' },
+  { code: 'like.style', label: 'Estilo', fix: 'Keep this rendering style (model, LoRA, finishing).' },
+];
+
 /** Reasons to approve. Optional, but they teach the agent what "good" looks like. */
 export const APPROVALS: Reason[] = [
   { code: 'ok.great', label: 'Excelente', fix: 'Keep as is. Good reference for future work.' },
@@ -146,20 +172,31 @@ export const APPROVALS: Reason[] = [
 const all = new Map<string, Reason & { area: string }>();
 for (const area of AREAS) for (const r of area.reasons) all.set(r.code, { ...r, area: area.id });
 for (const r of APPROVALS) all.set(r.code, { ...r, area: 'approve' });
+for (const r of LIKES) all.set(r.code, { ...r, area: 'like' });
 
 export function reasonOf(code: string): (Reason & { area: string }) | undefined {
   return all.get(code);
 }
 
 export function isApproval(code: string): boolean {
-  return code.startsWith('ok.');
+  return code.startsWith('ok.') || code.startsWith('like.');
+}
+
+/** Discovery batches judge taste ("gostei de"), not defects. */
+export function isDiscovery(phase: string | undefined): boolean {
+  return phase === 'g2';
+}
+
+export function approvalsFor(phase: string | undefined): Reason[] {
+  return isDiscovery(phase) ? LIKES : APPROVALS;
 }
 
 /** Areas to show first for a region kind, then the rest. */
-export function areasFor(kind: RegionKind | null): Area[] {
-  if (!kind) return AREAS;
-  const first = AREAS.filter((a) => a.kinds.includes(kind));
-  return [...first, ...AREAS.filter((a) => !first.includes(a))];
+export function areasFor(kind: RegionKind | null, phase?: string): Area[] {
+  const ordered = isDiscovery(phase) ? AREAS : [...AREAS.filter((a) => a.id !== 'concept'), AREAS.find((a) => a.id === 'concept')!];
+  if (!kind) return ordered;
+  const first = ordered.filter((a) => a.kinds.includes(kind));
+  return [...first, ...ordered.filter((a) => !first.includes(a))];
 }
 
 export const REGION_KIND_LABEL: Record<RegionKind, string> = {

@@ -16,7 +16,7 @@ export interface Phase {
 export const PHASES: Phase[] = [
   { id: 'g0', gate: 0, label: 'Licença e idade', focus: 'Personagem adulto, uso permitido de cada modelo.', regions: [] },
   { id: 'g1', gate: 1, label: 'Card', focus: 'Voz, regras e lore na conversa de teste.', regions: [] },
-  { id: 'g2', gate: 2, label: 'Âncoras', focus: 'O design aguenta o modelo local: rosto, cabelo, cores e silhueta iguais nas 20 gerações.', regions: ['face', 'hair', 'outfit'] },
+  { id: 'g2', gate: 2, label: 'Design', focus: 'Descoberta: diga do que gostou em cada conceito, para a próxima rodada juntar as partes. Depois, as âncoras: o design aguenta o modelo local nas 20 gerações.', regions: ['face', 'hair', 'outfit'] },
   { id: 'g3', gate: 3, label: 'Dataset', focus: 'Cada imagem limpa e no modelo; cobertura de ângulos e roupas.', regions: ['face', 'hand', 'outfit'] },
   { id: 'g4', gate: 4, label: 'LoRA', focus: 'Identidade e roupa só com os gatilhos; separação entre roupa e corpo.', regions: ['face', 'outfit'] },
   { id: 'g5', gate: 5, label: 'Sprites', focus: 'Mãos com 400 px ou mais na tela, olhos, pés, bordas no fundo escuro, igual entre expressões.', regions: ['face', 'eyes', 'hand', 'feet', 'edge'] },

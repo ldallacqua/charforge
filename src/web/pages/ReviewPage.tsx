@@ -3,9 +3,9 @@ import { ArrowLeft, Columns2, Eye, EyeOff, Focus as FocusIcon, History, Keyboard
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { phaseOf } from '../../shared/phases.ts';
-import { isApproval, REGION_KIND_LABEL, reasonOf } from '../../shared/taxonomy.ts';
+import { isApproval, isDiscovery, REGION_KIND_LABEL, reasonOf } from '../../shared/taxonomy.ts';
 import type { BatchDetail, Box, Item, Pin, Review } from '../../shared/types.ts';
-import { useBatch, useReopenBatch, useSaveReview, useSubmitBatch } from '../api.ts';
+import { useBatch, useMoreLikeThis, useReopenBatch, useSaveReview, useSubmitBatch } from '../api.ts';
 import { useKeys } from '../hooks.ts';
 import { CheckMark, CrossMark } from '../components/marks.tsx';
 import { CountsLine, Filmstrip, Kbd, Loupe, SegmentBar, phaseLabel } from '../components/parts.tsx';
@@ -113,7 +113,7 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
 
   const approve = () => {
     patch(item, { verdict: 'approve' });
-    if (review.verdict !== 'approve') setTimeout(() => go(nextPending(items, index)), 180);
+    if (review.verdict !== 'approve' && !isDiscovery(batch.phase)) setTimeout(() => go(nextPending(items, index)), 180);
   };
 
   const toggleReason = (code: string) => {
@@ -263,6 +263,12 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
           </div>
           <div className="px-4 pb-4 pt-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
             {phase && <p className="mb-3 text-xs leading-relaxed text-dim">{phase.focus}</p>}
+            {batch.notes && (
+              <details className="group mb-4 rounded-md border border-line bg-[#1f1f1f] px-3 py-2" open={index === 0}>
+                <summary className="cursor-pointer list-none text-xs font-semibold text-dim group-open:mb-1.5">Notas do Claude sobre este lote</summary>
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{batch.notes}</p>
+              </details>
+            )}
 
             {item.checks.length > 0 && (
               <div className="mb-4 flex flex-wrap gap-1.5">
@@ -296,7 +302,7 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
             <TargetHeader item={item} target={target} setTarget={setTarget} focusRegion={focusRegion} markRegion={markRegion} removePin={removePin} locked={locked} />
 
             <fieldset disabled={locked} className="mt-3 disabled:opacity-60">
-              <ReasonPicker kind={targetKind} selected={selectedCodes} onToggle={toggleReason} />
+              <ReasonPicker kind={targetKind} phase={batch.phase} selected={selectedCodes} onToggle={toggleReason} />
               {target.type === 'pin' && (
                 <PinNote
                   key={target.id}
@@ -306,15 +312,35 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
               )}
               <ItemNote key={item.id} value={review.note} onSave={(note) => patch(item, { note })} />
             </fieldset>
+            {Boolean(item.meta.request) && <MoreLikeThis slug={batch.characterSlug} itemId={item.id} />}
             {saveError && <p className="mt-2 text-xs text-mark">Não salvou: {saveError.message}</p>}
           </div>
 
-          <VerdictBar review={review} locked={locked} onApprove={approve} onReject={() => setVerdict('reject')} onToggleApproval={toggleReason} />
+          <VerdictBar review={review} phase={batch.phase} locked={locked} onApprove={approve} onReject={() => setVerdict('reject')} onToggleApproval={toggleReason} />
         </aside>
       </div>
 
       {help && <HelpOverlay onClose={() => setHelp(false)} />}
       {submitting && <SubmitDialog batch={batch} onClose={() => setSubmitting(false)} />}
+    </div>
+  );
+}
+
+function MoreLikeThis({ slug, itemId }: { slug: string; itemId: number }) {
+  const more = useMoreLikeThis(slug);
+  return (
+    <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
+      <button
+        type="button"
+        disabled={more.isPending || more.isSuccess}
+        onClick={() => more.mutate({ itemId, count: 4 })}
+        className="rounded-md border border-line px-3 py-1.5 text-xs font-semibold hover:border-faint disabled:opacity-50"
+      >
+        Gerar mais 4 parecidas
+      </button>
+      <span className="text-xs text-dim">
+        {more.isSuccess ? 'Na fila. Chegam como um lote novo.' : more.error ? more.error.message : 'Mesmo pedido, sementes novas.'}
+      </span>
     </div>
   );
 }
@@ -481,13 +507,15 @@ function PinNote({ pin, onSave }: { pin?: Pin; onSave: (v: string) => void }) {
   );
 }
 
-function VerdictBar({ review, locked, onApprove, onReject, onToggleApproval }: { review: Review; locked: boolean; onApprove: () => void; onReject: () => void; onToggleApproval: (c: string) => void }) {
+function VerdictBar({ review, phase, locked, onApprove, onReject, onToggleApproval }: { review: Review; phase: string; locked: boolean; onApprove: () => void; onReject: () => void; onToggleApproval: (c: string) => void }) {
   const v = review.verdict;
+  const taste = isDiscovery(phase);
   return (
     <div className="sticky bottom-0 z-10 shrink-0 border-t border-line bg-[#191919] px-4 pb-[max(env(safe-area-inset-bottom),12px)] pt-3">
       {v === 'approve' && (
         <div className="mb-3">
-          <ApprovalChips selected={review.reasons} onToggle={onToggleApproval} />
+          {taste && <div className="mb-1.5 text-xs text-dim">Do que você gostou nele?</div>}
+          <ApprovalChips phase={phase} selected={review.reasons} onToggle={onToggleApproval} />
         </div>
       )}
       <div className="grid grid-cols-2 gap-2">
@@ -500,7 +528,7 @@ function VerdictBar({ review, locked, onApprove, onReject, onToggleApproval }: {
             v === 'reject' ? 'border-mark bg-mark text-[#160d0c]' : 'border-line text-ink hover:border-mark/70',
           )}
         >
-          <CrossMark className={clsx('size-4', v === 'reject' && 'text-[#160d0c]')} animate={v === 'reject'} /> Recusar <Kbd>R</Kbd>
+          <CrossMark className={clsx('size-4', v === 'reject' && 'text-[#160d0c]')} animate={v === 'reject'} /> {taste ? 'Não gostei' : 'Recusar'} <Kbd>R</Kbd>
         </button>
         <button
           type="button"
@@ -511,7 +539,7 @@ function VerdictBar({ review, locked, onApprove, onReject, onToggleApproval }: {
             v === 'approve' ? 'border-proof bg-proof text-[#0c160f]' : 'border-line text-ink hover:border-proof/70',
           )}
         >
-          <CheckMark className={clsx('size-4', v === 'approve' && 'text-[#0c160f]')} animate={v === 'approve'} /> Aprovar <Kbd>A</Kbd>
+          <CheckMark className={clsx('size-4', v === 'approve' && 'text-[#0c160f]')} animate={v === 'approve'} /> {taste ? 'Gostei' : 'Aprovar'} <Kbd>A</Kbd>
         </button>
       </div>
     </div>

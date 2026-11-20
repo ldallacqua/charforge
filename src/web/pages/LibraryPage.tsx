@@ -24,7 +24,12 @@ export function LibraryPage() {
         </section>
 
         <section className="pt-12">
-          <h2 className="text-xl font-semibold">Personagens</h2>
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-semibold">Personagens</h2>
+            <Link to="/new" className="ml-auto rounded-md border border-line px-3 py-1.5 text-sm font-semibold hover:border-faint">
+              Novo personagem
+            </Link>
+          </div>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {data?.characters.map((c) => (
               <Link key={c.id} to={`/c/${c.slug}`} className="group overflow-hidden rounded-xl border border-line bg-[#212121] transition-colors hover:border-faint">
@@ -49,7 +54,7 @@ export function LibraryPage() {
           </div>
           {data && data.characters.length === 0 && (
             <p className="mt-4 max-w-prose text-sm text-dim">
-              Nenhum personagem ainda. Peça ao Claude para começar um: ele cria o personagem e envia o primeiro lote de imagens para cá.
+              Nenhum personagem ainda. Crie um com o brief do que você quer, e o agente volta com as primeiras opções de conceito.
             </p>
           )}
         </section>

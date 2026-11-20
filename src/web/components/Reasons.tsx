@@ -1,10 +1,10 @@
 import clsx from 'clsx';
-import { APPROVALS, areasFor } from '../../shared/taxonomy.ts';
+import { approvalsFor, areasFor } from '../../shared/taxonomy.ts';
 import type { RegionKind } from '../../shared/types.ts';
 
 /** The problem vocabulary, opened at the areas that matter for what is in focus. */
-export function ReasonPicker({ kind, selected, onToggle, compact = false }: { kind: RegionKind | null; selected: string[]; onToggle: (code: string) => void; compact?: boolean }) {
-  const areas = areasFor(kind);
+export function ReasonPicker({ kind, phase, selected, onToggle, compact = false }: { kind: RegionKind | null; phase?: string; selected: string[]; onToggle: (code: string) => void; compact?: boolean }) {
+  const areas = areasFor(kind, phase);
   const primary = kind ? areas.filter((a) => a.kinds.includes(kind)) : [];
   const rest = areas.filter((a) => !primary.includes(a));
   const shown = primary.length ? primary : rest.slice(0, compact ? 3 : rest.length);
@@ -58,10 +58,10 @@ function AreaChips({ label, codes, selected, onToggle }: { label: string; codes:
   );
 }
 
-export function ApprovalChips({ selected, onToggle }: { selected: string[]; onToggle: (code: string) => void }) {
+export function ApprovalChips({ phase, selected, onToggle }: { phase?: string; selected: string[]; onToggle: (code: string) => void }) {
   return (
     <div className="flex flex-wrap gap-1.5">
-      {APPROVALS.map((r) => {
+      {approvalsFor(phase).map((r) => {
         const on = selected.includes(r.code);
         return (
           <button

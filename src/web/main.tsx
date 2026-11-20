@@ -6,6 +6,7 @@ import type { Batch } from '../shared/types.ts';
 import { queryClient, useLibrary, useLiveUpdates } from './api.ts';
 import { CharacterPage } from './pages/CharacterPage.tsx';
 import { LibraryPage } from './pages/LibraryPage.tsx';
+import { NewCharacterPage } from './pages/NewCharacterPage.tsx';
 import { ReviewPage } from './pages/ReviewPage.tsx';
 import './styles.css';
 
@@ -57,6 +58,7 @@ createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LibraryPage />} />
+          <Route path="/new" element={<NewCharacterPage />} />
           <Route path="/c/:slug" element={<CharacterPage />} />
           <Route path="/review/:id" element={<ReviewPage />} />
         </Routes>
