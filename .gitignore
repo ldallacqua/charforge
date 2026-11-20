@@ -1,0 +1,8 @@
+node_modules/
+dist/
+# Review data: generated images (some NSFW), the database and thumbnails. Never commit.
+data/
+*.db
+*.db-*
+.DS_Store
+.env

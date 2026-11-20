@@ -1,0 +1,45 @@
+{
+  "name": "charforge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Character builder studio: the agent generates, the owner reviews every image with structured verdicts.",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "forge": "./bin/forge.ts"
+  },
+  "scripts": {
+    "dev": "node --run dev:server & vite",
+    "dev:server": "node --watch --disable-warning=ExperimentalWarning src/server/main.ts",
+    "build": "vite build",
+    "start": "node --disable-warning=ExperimentalWarning src/server/main.ts",
+    "forge": "node --disable-warning=ExperimentalWarning bin/forge.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource-variable/archivo": "5.3.0",
+    "@hono/node-server": "2.1.9",
+    "@tanstack/react-query": "5.108.1",
+    "clsx": "2.1.1",
+    "hono": "4.13.19",
+    "lucide-react": "1.76.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-router": "8.5.2",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.5",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "tailwindcss": "4.3.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.1"
+  }
+}

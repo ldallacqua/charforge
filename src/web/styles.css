@@ -1,0 +1,96 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/archivo/wdth.css';
+
+/*
+  Review-room palette. The surround is a true neutral grey (no tint) so colour judgement of the art is
+  not biased; the only saturated colours are the two grease-pencil marks (reject, approve) and the
+  amber that shows what is in focus.
+*/
+@theme {
+  --font-sans: 'Archivo Variable', ui-sans-serif, system-ui, sans-serif;
+
+  --color-room: #262626;
+  --color-panel: #1c1c1c;
+  --color-raised: #2f2f2f;
+  --color-line: #3b3b3b;
+  --color-ink: #ecebe7;
+  --color-dim: #a6a49e;
+  --color-faint: #73716c;
+  --color-mark: #e5402f;
+  --color-proof: #4bb67b;
+  --color-amber: #e8b04a;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--color-panel);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'tnum' 1;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-amber);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-amber) 40%, transparent);
+  }
+}
+
+@utility font-wide {
+  font-stretch: 125%;
+}
+@utility font-narrow {
+  font-stretch: 72%;
+}
+
+/* backgrounds the art can be judged on */
+@utility bg-checker {
+  background-color: #fff;
+  background-image: conic-gradient(#d9d9d9 25%, #fff 0 50%, #d9d9d9 0 75%, #fff 0);
+  background-size: 16px 16px;
+}
+@utility bg-checker-dark {
+  background-color: #2a2a2a;
+  background-image: conic-gradient(#343434 25%, #2a2a2a 0 50%, #343434 0 75%, #2a2a2a 0);
+  background-size: 16px 16px;
+}
+
+/* scrollbars that stay out of the way */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #444 transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+@keyframes mark-draw {
+  from {
+    stroke-dashoffset: var(--len, 120);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.mark-draw {
+  stroke-dasharray: var(--len, 120);
+  animation: mark-draw 260ms cubic-bezier(0.3, 0.7, 0.2, 1) both;
+}
