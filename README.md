@@ -43,6 +43,12 @@ trocar depois:
 NSFW só sai da GPU local; o estúdio recusa mandar NSFW para um serviço na nuvem. Detalhes em
 [docs/RENDERING.md](docs/RENDERING.md).
 
+**Ampliação 2× em blocos.** No mestre de corpo inteiro o rosto sai pequeno (~230 px na GPU, ~175 px no
+GPT); a sprite precisa de 265 px. Recortar direto amplia o recorte (1,15× a 1,5×) e borra. Por isso toda imagem aprovada é ampliada 2× antes do
+recorte: ela é redesenhada em blocos sobrepostos (um deles centrado no rosto, para os olhos virem de um
+desenho só) e os blocos são alinhados e juntados sem emenda, com a cor da original. O redesenho é do GPT
+no SFW (o método escolhido no Siren Siege) ou do SDXL com a LoRA na GPU local, a única opção para NSFW.
+
 **Retomar de qualquer ponto.** Todo o estado (brief, perfil, lotes, vereditos, fases) fica no estúdio.
 Qualquer agente, de qualquer provedor, continua o trabalho com `forge next <personagem>`. As instruções
 para agentes estão em [AGENTS.md](AGENTS.md).
@@ -58,6 +64,7 @@ para agentes estão em [AGENTS.md](AGENTS.md).
 | Marcações (P, ou Shift + arrastar) | circular o ponto exato; o agente recebe as coordenadas |
 | Modo escolha | candidatas lado a lado com o mesmo zoom; recusa com motivo direto em cada imagem |
 | "Gerar mais 4 parecidas" | o mesmo pedido com sementes novas, direto do estúdio |
+| "Ampliar 2×" | redesenha a imagem em blocos com o dobro da resolução (GPT no SFW, GPU local no NSFW) e devolve um lote com a original como "antes" |
 | Atualização ao vivo, funciona no celular | revisar de qualquer lugar |
 
 Atalhos: `A` aprova, `R` recusa, `1`–`9` amplia a região, `Tab` próxima região, `O` região OK, `C`
@@ -65,7 +72,8 @@ compara, `B` troca o fundo, `P` marca um ponto, `?` mostra todos.
 
 ## Rodar
 
-Requer Node 24 e pnpm.
+Requer Node 24 e pnpm. A ampliação 2× também usa Python 3.9+ (`python3 -m venv tools/.venv &&
+tools/.venv/bin/pip install -r tools/requirements.txt`); a imagem Docker já vem com ele.
 
 ```bash
 pnpm install
@@ -82,6 +90,7 @@ Com Docker: `docker compose up -d` (veja `compose.yaml`). Desenvolvimento: `pnpm
 | `COMFYUI_URL` | a sua GPU local (ComfyUI) |
 | `OPENAI_API_KEY` | a API de imagens da OpenAI (só no ambiente, nunca no estúdio) |
 | `CODEX_BIN` | o Codex CLI, se não for achado sozinho |
+| `CHARFORGE_PYTHON` | Python com numpy, pillow e OpenCV 4 para a ampliação (achado sozinho em `tools/.venv`) |
 | `CHARFORGE_WORKER_BACKENDS` | backends que o próprio servidor roda (ex.: `comfyui,openai`) |
 
 O Codex CLI roda na máquina onde está instalado: lá, `pnpm forge worker` pega os pedidos de geração.

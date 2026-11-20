@@ -60,6 +60,19 @@ export function backendFor(profile: RenderProfile, rating: Rating): BackendConfi
   return c;
 }
 
+/**
+ * The profile's backend for this rating, or another backend asked for by name (to compare methods).
+ * A backend the profile uses elsewhere keeps its options there (checkpoint, LoRA). NSFW stays local:
+ * render() refuses it on cloud backends whatever is asked.
+ */
+export function configFor(profile: RenderProfile, rating: Rating, backend?: BackendId | null): BackendConfig {
+  const own = backendFor(profile, rating);
+  if (!backend || backend === own.backend) return own;
+  if (!BACKENDS[backend]) throw new Error(`unknown backend ${backend}`);
+  const other = [profile.sfw, profile.nsfw].find((c) => c?.backend === backend);
+  return { backend, options: other?.options ?? {} };
+}
+
 /** Render with whatever backend the config names. Throws when the backend cannot run in this environment. */
 export async function render(config: BackendConfig, req: RenderRequest, outDir: string, log: Log = () => {}): Promise<RenderOutput[]> {
   const b = BACKENDS[config.backend];

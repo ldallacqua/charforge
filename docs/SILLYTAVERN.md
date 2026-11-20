@@ -11,7 +11,7 @@ keeps writing the old state).
 |---|---|
 | Card | `characters/<Name>.png` (V2/V3 card), avatar 2:3 |
 | Lorebook | `worlds/<World>.json`, linked from the card (`extensions.world`) and embedded as `character_book` |
-| Sprites, canonical outfit | `characters/<Name>/<label>.png`, the 28 labels (PLAYBOOK G5) |
+| Sprites, canonical outfit | `characters/<Name>/<label>.png`, the 28 labels (PLAYBOOK G5): 832 x 1367 crops of the masters finished at 2x |
 | Sprites, other outfits | `characters/<Name>/<outfit>/<label>.png` (`nude/`, `robe/`...) |
 | Backgrounds | `backgrounds/<Realm> - <Place>.jpg` |
 

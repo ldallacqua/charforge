@@ -74,6 +74,14 @@ export function useMoreLikeThis(slug: string) {
   });
 }
 
+/** The finishing step: the item redrawn in tiles at twice the size, by the character's method for its rating. */
+export function useFinish(slug: string) {
+  return useMutation({
+    mutationFn: ({ itemId }: { itemId: number }) => call<Job>(`/api/characters/${slug}/jobs`, send('POST', { fromItem: itemId, finish: true })),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.jobs(slug) }),
+  });
+}
+
 export function useLibrary() {
   return useQuery({ queryKey: keys.library, queryFn: () => call<{ characters: Character[]; waiting: Batch[] }>('/api/characters') });
 }

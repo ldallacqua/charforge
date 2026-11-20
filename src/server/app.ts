@@ -13,7 +13,8 @@ import { exportVerdicts, submitBlockers } from './verdicts.ts';
 import { phaseOf } from '../shared/phases.ts';
 import { reasonOf } from '../shared/taxonomy.ts';
 import type { BatchKind, Box, GateMark, Job, Manifest, Pin, Region, Review, ServerEvent } from '../shared/types.ts';
-import { BACKENDS, PRESETS, backendFor, render, validateProfile, type RenderProfile, type RenderRequest } from '../render/index.ts';
+import { BACKENDS, PRESETS, configFor, validateProfile, type BackendId, type FinishSpec, type Rating, type RenderProfile, type RenderRequest } from '../render/index.ts';
+import { FINISH_LABEL, finishMode, perform } from '../render/finish.ts';
 import { localInputs } from '../render/inputs.ts';
 import { nextStep } from './next.ts';
 
@@ -126,11 +127,33 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
     const ch = db.getCharacter(slug);
     if (!ch) return c.json({ error: 'not found' }, 404);
     if (!ch.profile) return c.json({ error: 'this character has no render profile yet' }, 409);
-    const body = await c.req.json<{ phase?: string; kind?: BatchKind; title?: string; group?: string; request?: RenderRequest; fromItem?: number; count?: number }>();
+    const body = await c.req.json<{
+      phase?: string; kind?: BatchKind; title?: string; group?: string; request?: RenderRequest; fromItem?: number; count?: number;
+      /** finish the item (enlarge 2x in tiles) instead of repeating its render */
+      finish?: boolean | FinishSpec;
+      /** a backend other than the profile's for this rating, to compare methods */
+      backend?: BackendId;
+      rating?: Rating;
+    }>();
     let request = body.request;
     let phase = body.phase;
     let title = body.title ?? '';
-    if (body.fromItem) {
+    if (body.fromItem && body.finish) {
+      const it = db.itemRow(body.fromItem);
+      if (!it) return c.json({ error: 'item not found' }, 404);
+      const meta = JSON.parse(it.meta as string) as { request?: RenderRequest; rating?: Rating };
+      const regions = JSON.parse(it.regions as string) as Region[];
+      // An image whose rating the studio does not know is treated as NSFW, so it never leaves the machine.
+      const rating: Rating = body.rating ?? meta.rating ?? meta.request?.rating ?? (ch.profile.nsfw ? 'nsfw' : 'sfw');
+      const spec: FinishSpec = typeof body.finish === 'object' ? body.finish : {};
+      request = {
+        prompt: meta.request?.prompt ?? '', negative: meta.request?.negative, rating, init: `/files/${it.file as string}`, count: 1,
+        options: meta.request?.options,
+        finish: { scale: 2, ...spec, face: spec.face ?? regions.find((g) => g.kind === 'face')?.box ?? null, regions, sourceItem: it.id as number },
+      };
+      phase ??= db.batchSummary(it.batch_id as number)?.phase;
+      title ||= `Ampliação 2× de ${it.label as string}`;
+    } else if (body.fromItem) {
       // "more like this": same request as the item that came from a render, new seeds
       const it = db.itemRow(body.fromItem);
       const meta = it ? (JSON.parse(it.meta as string) as { request?: RenderRequest }) : null;
@@ -139,12 +162,16 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
       phase ??= db.batchSummary(it.batch_id as number)?.phase;
       title ||= `Variações de ${it.label}`;
     }
-    if (!request?.prompt?.trim()) return c.json({ error: 'request.prompt is required' }, 400);
+    if (!request) return c.json({ error: 'request (or fromItem) is required' }, 400);
+    if (!request.finish && !request.prompt?.trim()) return c.json({ error: 'request.prompt is required' }, 400);
+    if (request.finish && !request.init) return c.json({ error: 'finishing needs request.init (the picture)' }, 400);
     if (!phase || !phaseOf(phase)) return c.json({ error: 'phase is required (g0..g8)' }, 400);
     const rating = request.rating === 'nsfw' ? 'nsfw' : 'sfw';
     let config;
     try {
-      config = backendFor(ch.profile, rating);
+      config = configFor(ch.profile, rating, body.backend);
+      if (rating === 'nsfw' && !BACKENDS[config.backend].allowsNsfw(config.options ?? {})) throw new Error(`${BACKENDS[config.backend].label} cannot render NSFW: NSFW stays on a local backend`);
+      if (request.finish) finishMode(config.backend);
     } catch (e) {
       return c.json({ error: (e as Error).message }, 409);
     }
@@ -161,7 +188,7 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
     if (!job) return c.body(null, 204);
     emit({ type: 'job.updated', job });
     const ch = db.getCharacter(job.characterSlug)!;
-    return c.json({ job, config: ch.profile ? backendFor(ch.profile, job.rating) : null });
+    return c.json({ job, config: ch.profile ? configFor(ch.profile, job.rating, job.backend as BackendId) : null });
   });
 
   app.post('/api/jobs/:id/complete', async (c) => {
@@ -169,10 +196,13 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
     const job = db.getJob(id);
     if (!job) return c.json({ error: 'not found' }, 404);
     const form = await c.req.parseBody({ all: false });
-    const outputs = JSON.parse(String(form.outputs ?? '[]')) as { field: string; seed?: number; meta?: Record<string, unknown> }[];
+    const outputs = JSON.parse(String(form.outputs ?? '[]')) as JobOutput[];
     const batch = await completeJob(job, outputs, formFile(form));
     return c.json(batch);
   });
+
+  /** A job's result as a worker reports it: file fields, plus the picture it started from when finishing. */
+  type JobOutput = { field: string; previous?: string; seed?: number; meta?: Record<string, unknown> };
 
   app.post('/api/jobs/:id/fail', async (c) => {
     const id = Number(c.req.param('id'));
@@ -183,15 +213,22 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
     return c.json(job);
   });
 
-  async function completeJob(job: Job, outputs: { field: string; seed?: number; meta?: Record<string, unknown> }[], getFile: (f: string) => Promise<Upload | null>) {
+  async function completeJob(job: Job, outputs: JobOutput[], getFile: (f: string) => Promise<Upload | null>) {
     if (!outputs.length) throw new HttpError(400, 'no outputs');
     const req = job.request;
+    const fin = req.finish;
+    const method = fin ? FINISH_LABEL[finishMode(job.backend as BackendId)] : '';
+    const scale = fin?.scale ?? 2;
     const batch = await ingest(
       {
         character: job.characterSlug, phase: job.phase, kind: job.kind, title: job.title,
-        notes: `Gerado por ${job.backend} (job #${job.id}). Prompt: ${req.prompt.slice(0, 400)}`,
+        notes: fin
+          ? `Ampliado ${scale}× por ${method} (${job.backend}, job #${job.id}). Compare com a imagem de antes (tecla C) a 3×: olhos, mãos, contorno, cor da pele.`
+          : `Gerado por ${job.backend} (job #${job.id}). Prompt: ${req.prompt.slice(0, 400)}`,
         items: outputs.map((o, i) => ({
-          file: o.field, label: o.seed !== undefined ? `seed ${o.seed}` : `${job.backend} ${i + 1}`, group: job.group,
+          file: o.field, previous: o.previous, group: job.group,
+          label: fin ? method : o.seed !== undefined ? `seed ${o.seed}` : `${job.backend} ${i + 1}`,
+          regions: fin?.regions?.map((g) => ({ id: g.id, kind: g.kind as Region['kind'], label: g.label, box: g.box.map((v) => Math.round(v * scale)) as Box })),
           meta: { ...o.meta, backend: job.backend, rating: job.rating, seed: o.seed, jobId: job.id, request: { ...req, seed: o.seed, count: 1 } },
         })),
       },
@@ -217,11 +254,12 @@ export function createApp(db: Db, dataDir: string, webDir?: string) {
         const dir = await mkdtemp(join(tmpdir(), 'charforge-job-'));
         try {
           const req = await localInputs(job.request, dataDir, dir);
-          const outs = await render(backendFor(ch.profile!, job.rating), req, dir, (l) => console.log(`[job ${job!.id}] ${l}`));
+          const outs = await perform(configFor(ch.profile!, job.rating, job.backend as BackendId), req, dir, (l) => console.log(`[job ${job!.id}] ${l}`));
           const files = new Map<string, Upload>();
-          const list = await Promise.all(outs.map(async (o, i) => {
+          if (req.finish && req.init) files.set('previous', { name: basename(req.init), data: new Uint8Array(await readFile(req.init)) });
+          const list: JobOutput[] = await Promise.all(outs.map(async (o, i) => {
             files.set(`o${i}`, { name: basename(o.file), data: new Uint8Array(await readFile(o.file)) });
-            return { field: `o${i}`, seed: o.seed, meta: o.meta };
+            return { field: `o${i}`, previous: files.has('previous') ? 'previous' : undefined, seed: o.seed, meta: o.meta };
           }));
           await completeJob(job, list, async (f) => files.get(f) ?? null);
         } catch (e) {

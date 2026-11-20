@@ -2,5 +2,5 @@
 numpy
 pillow
 scipy
-opencv-python-headless
+opencv-python-headless>=4.8,<5  # 5.x dropped CascadeClassifier (face detection)
 rembg[cpu]

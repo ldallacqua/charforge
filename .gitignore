@@ -7,3 +7,5 @@ data/
 .DS_Store
 .env
 renders/
+tools/.venv/
+__pycache__/

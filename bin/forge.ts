@@ -11,6 +11,9 @@
 //   forge render --char <slug> --rating sfw|nsfw --prompt <text|@file> [--negative ...] [--n 4] [--size 768x1344]
 //                [--seed N] [--init img] [--denoise 0.5] [--ref img]... [--transparent] [--opt k=v]... [--out dir]
 //                [--submit --phase g2 --title "..." [--group ...] [--kind review|pick]]
+//   forge finish --char <slug> --item <id> [--backend codex|comfyui] [--rating sfw|nsfw] [--face x0,y0,x1,y1]
+//   forge finish --char <slug> --init <img> --rating sfw|nsfw [--backend ...] [--prompt ...] [--out dir]
+//                enlarge 2x by redrawing in tiles (GPT or local SDXL); --item queues it, --init runs it here
 //   forge submit --char <slug> --phase g5 --title "..." [--kind review|pick] [--notes <text|@file>]
 //                [--parent <batchId>] (--manifest <file.json> | <image> ...)
 //   forge wait <batchId> [--timeout <seconds>] [--json]
@@ -29,6 +32,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { Batch, CharacterDetail, Character, Job, Manifest, ManifestItem, NextStep } from '../src/shared/types.ts';
 import { availableBackends, render as renderWith, type BackendConfig, type RenderRequest } from '../src/render/index.ts';
+import { FINISH_LABEL, finish as finishWith, finishMode, perform } from '../src/render/finish.ts';
 import { localInputs } from '../src/render/inputs.ts';
 import { PHASES } from '../src/shared/phases.ts';
 import type { VerdictExport } from '../src/server/verdicts.ts';
@@ -170,6 +174,54 @@ async function renderCmd(argv: string[]) {
   await submit(['--manifest', mf]);
 }
 
+/**
+ * The finishing step (2x in tiles). `--item` queues a job in the studio (a worker runs it, the result
+ * arrives as a batch with the item as "before"); `--init` runs it here, like `forge render`.
+ */
+async function finishCmd(argv: string[]) {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      char: { type: 'string' }, item: { type: 'string' }, init: { type: 'string' }, rating: { type: 'string' }, backend: { type: 'string' },
+      scale: { type: 'string' }, face: { type: 'string' }, prompt: { type: 'string' }, negative: { type: 'string' }, seed: { type: 'string' },
+      denoise: { type: 'string' }, 'face-denoise': { type: 'string' }, density: { type: 'string' }, opt: { type: 'string', multiple: true },
+      out: { type: 'string' }, phase: { type: 'string' }, title: { type: 'string' },
+    },
+  });
+  if (!values.char) throw new Error('--char is required');
+  const face = values.face ? (values.face.split(',').map(Number) as [number, number, number, number]) : undefined;
+  if (face && (face.length !== 4 || face.some((v) => !Number.isFinite(v)))) throw new Error('--face is x0,y0,x1,y1 in the picture\'s pixels');
+  const spec = {
+    scale: values.scale ? Number(values.scale) : 2, face,
+    denoise: values.denoise ? Number(values.denoise) : undefined, faceDenoise: values['face-denoise'] ? Number(values['face-denoise']) : undefined,
+    density: values.density ? Number(values.density) : undefined,
+  };
+  if (values.item) {
+    const job = await api<Job>(`/api/characters/${values.char}/jobs`, json({ fromItem: Number(values.item), finish: spec, backend: values.backend, rating: values.rating, phase: values.phase, title: values.title }));
+    console.log(`job #${job.id}: ${FINISH_LABEL[finishMode(job.backend as BackendConfig['backend'])]} (${job.backend}, ${job.rating}); the result arrives as a new batch`);
+    return;
+  }
+  if (!values.init) throw new Error('--item <id> (queue it in the studio) or --init <picture> (run it here) is required');
+  if (values.rating !== 'sfw' && values.rating !== 'nsfw') throw new Error('--rating sfw|nsfw is required: NSFW is only ever finished on a local backend');
+  const ch = await api<CharacterDetail>(`/api/characters/${values.char}`);
+  if (!ch.profile) throw new Error(`${values.char} has no render profile`);
+  const own = ch.profile[values.rating];
+  if (!own) throw new Error(`${values.char} has no ${values.rating.toUpperCase()} backend`);
+  const config: BackendConfig = values.backend && values.backend !== own.backend
+    ? { backend: values.backend as BackendConfig['backend'], options: [ch.profile.sfw, ch.profile.nsfw].find((c) => c?.backend === values.backend)?.options ?? {} }
+    : own;
+  const req: RenderRequest = {
+    prompt: values.prompt ? await text(values.prompt) : '', negative: values.negative, rating: values.rating, init: resolve(values.init),
+    seed: values.seed ? Number(values.seed) : undefined, options: kv(values.opt), finish: spec,
+  };
+  const out = resolve(values.out ?? join('renders', `finish-${Date.now()}`));
+  const t0 = Date.now();
+  const [o] = await finishWith(config, req, out, (l) => console.error(l));
+  await writeFile(join(out, 'finish.json'), JSON.stringify({ config: { backend: config.backend }, request: req, output: o }, null, 2));
+  console.error(`${o.width}x${o.height} by ${FINISH_LABEL[finishMode(config.backend)]} in ${Math.round((Date.now() - t0) / 1000)}s`);
+  console.log(o.file);
+}
+
 async function gate(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { note: { type: 'string' } } });
   const [slug, g, status] = positionals;
@@ -208,10 +260,12 @@ async function worker(argv: string[]) {
     const dir = await mkdtemp(join(tmpdir(), 'charforge-worker-'));
     try {
       const req = await localInputs(job.request, BASE, dir);
-      const outs = await renderWith(config, req, dir, (l) => console.error(`  ${l}`));
+      const outs = await perform(config, req, dir, (l) => console.error(`  ${l}`));
       const fd = new FormData();
       for (const [i, o] of outs.entries()) fd.append(`o${i}`, await openAsBlob(o.file), basename(o.file));
-      fd.append('outputs', JSON.stringify(outs.map((o, i) => ({ field: `o${i}`, seed: o.seed, meta: o.meta }))));
+      const previous = req.finish && req.init ? 'previous' : undefined;
+      if (previous) fd.append(previous, await openAsBlob(req.init!), basename(req.init!));
+      fd.append('outputs', JSON.stringify(outs.map((o, i) => ({ field: `o${i}`, previous, seed: o.seed, meta: o.meta }))));
       const b = await api<Batch>(`/api/jobs/${job.id}/complete`, { method: 'POST', body: fd });
       console.error(`  -> batch #${b.id}`);
     } catch (e) {
@@ -325,7 +379,7 @@ async function wait(argv: string[]) {
 
 const [cmd, ...rest] = process.argv.slice(2);
 const commands: Record<string, (a: string[]) => Promise<void>> = {
-  next, status, char, profile, render: renderCmd, submit, verdicts, wait, gate, worker,
+  next, status, char, profile, render: renderCmd, finish: finishCmd, submit, verdicts, wait, gate, worker,
   serve: async () => void (await import('../src/server/main.ts')),
 };
 const run = commands[cmd ?? ''];

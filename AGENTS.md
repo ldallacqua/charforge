@@ -39,7 +39,9 @@ pnpm start                        # studio on http://127.0.0.1:8787 (FORGE_URL f
 
 Rendering needs, on the machine that renders: `COMFYUI_URL` (local GPU), `OPENAI_API_KEY` (API), or the
 Codex CLI logged in (found automatically). Check with `pnpm forge worker --once` or a test render with
-`--backend mock`. Python tools: `python -m venv .venv && .venv/bin/pip install -r tools/requirements.txt`.
+`--backend mock`. Python tools (the finishing step needs them too):
+`python3 -m venv tools/.venv && tools/.venv/bin/pip install -r tools/requirements.txt` (found automatically
+there, or set `CHARFORGE_PYTHON`; OpenCV must stay below 5, which dropped the face detector).
 
 ## The loop
 
@@ -71,6 +73,9 @@ forge profile <slug> [--preset <id>] [--sfw <backend>] [--nsfw <backend|none>] [
 forge render --char <slug> --rating sfw|nsfw --prompt <text|@file> [--negative ...] [--n N] [--size WxH] [--seed N]
              [--init img --denoise 0.5] [--ref img]... [--transparent] [--opt k=v]... [--out dir]
              [--submit --phase gN --title "..." [--group ...] [--kind review|pick]]
+forge finish --char <slug> --item <id> [--backend comfyui|codex] [--rating sfw|nsfw] [--face x0,y0,x1,y1]
+forge finish --char <slug> --init img --rating sfw|nsfw [--backend ...] [--prompt ...] [--out dir]
+             (2x in tiles: --item queues it in the studio, --init runs it here)
 forge submit (--manifest file.json | --char <slug> --phase gN --title "..." <images>...) [--kind pick] [--parent <id>]
 forge wait <batchId> [--timeout s] [--json]   forge verdicts <batchId> [--json]
 forge gate <slug> <g0..g8> done|open [--note ...]
@@ -109,7 +114,11 @@ accessory wings tail edge other`. Phases `g0`-`g8`. Check status `pass warn fail
 - **Secrets** (API keys) only in the environment of the rendering machine. Never in profiles, manifests,
   notes, commits or the UI.
 - **Never commit `data/`** (images, some NSFW, and the database) or renders.
-- **Full-body masters** for sprites; display crops come from the master. Feet get a region.
+- **Full-body masters** for sprites; display crops come from the master **after the 2x finish**
+  (`forge finish`): a crop must shrink the master, never enlarge it. Feet get a region.
+- **Finishing**: GPT in tiles for SFW, GPU local in tiles for NSFW; keep the face tile's denoise at 0.2 (the default) or
+  lower and the expression in the prompt, or the eyes change. Show the owner the result with the picture
+  as "before" (the studio job does this) and wait for approval.
 - **Reason codes** (`src/shared/taxonomy.ts`) are stored and read by agents: add codes, never rename or
   remove. Labels Portuguese (owner), `fix` English (agents).
 - **Language:** UI copy and batch notes in Portuguese (pt-BR, sentence case, plain verbs); code, comments

@@ -59,7 +59,8 @@ forge render --char <slug> --rating sfw --prompt @prompt.txt [--negative "..."] 
 
 ## Jobs and workers
 
-The studio can render on its own (the owner's "Gerar mais 4 parecidas", or `POST /api/characters/<slug>/jobs`):
+The studio can render on its own (the owner's "Gerar mais 4 parecidas" and "Ampliar 2×", or
+`POST /api/characters/<slug>/jobs` with a `request`, or `fromItem` plus `count` or `finish`):
 it queues a **job** for the backend the profile names, and a **worker** that can run that backend takes it.
 The images arrive as a new batch.
 
@@ -71,14 +72,62 @@ The images arrive as a new batch.
 
 ## Resolution and transparency
 
-| Backend | Native size | High resolution | Transparency |
-|---|---|---|---|
-| comfyui (SDXL) | ~1 MP base (832 x 1216, 768 x 1344, 1152 x 896), hires 1.5x built in | upscale 2x locally (UltimateSDUpscale + low-denoise tiles) | none: render on flat white and run `tools/cutout2.py` (LayerDiffuse for SDXL and Qwen-Image 2.1 are native options not wired in yet) |
-| openai | 1024 x 1024, 1024 x 1536, 1536 x 1024 (larger on newer models) | upscale locally; or render 4 overlapping tiles with the full image as reference and blend | `--transparent` |
-| codex | ~1024 x 1536 (plan limit), ~60-100 s per image, one at a time | as openai | `--transparent` |
+| Backend | Native size | Transparency |
+|---|---|---|
+| comfyui (SDXL) | ~1 MP base (832 x 1216, 768 x 1344, 1152 x 896), hires 1.5x built in | none: render on flat white and run `tools/cutout2.py` (LayerDiffuse for SDXL and Qwen-Image 2.1 are native options not wired in yet) |
+| openai | 1024 x 1024, 1024 x 1536, 1536 x 1024 (larger on newer models) | `--transparent` |
+| codex | ~1024 x 1536 (plan limit), ~60-100 s per image | `--transparent` |
 
-Full-body sprite masters: 768 x 1344 base, hires to 1152 x 2016 on comfyui; 1024 x 1536 on the cloud
-backends, then upscale.
+Full-body sprite masters: 768 x 1344 base with hires to 1152 x 2016 on comfyui, 1024 x 1536 on the cloud
+backends. Neither is enough to crop from. The SillyTavern sprite has the face at F = 265 px (the anime face
+detector's box); in a full-body master that box is ~230 px at 1152 x 2016 and ~175 px at 1024 x 1536, so a
+crop straight from the master is enlarged ~1.15x (GPU) or ~1.5x (GPT), and the face was drawn small to
+begin with. **Every approved master is finished at 2x before it is cropped or cut out**: the crop then
+shrinks the master (~0.6x) and keeps the redrawn detail.
+
+## Finishing: 2x in tiles
+
+`forge finish` (or "Ampliar 2×" on an image in the studio) enlarges an approved picture to twice its size
+by redrawing it in overlapping tiles and joining them without seams. `tools/tiles.py` cuts and joins (no
+model runs there); the backend redraws every tile. The method is Siren Siege's decision D-037, which the
+owner compared and approved. The join holds for four reasons:
+- tiles overlap, and one extra tile is centred on the face, so the eyes come from a single redraw (that
+  tile wins wherever it reaches);
+- every redraw is lined up with the part it redraws (OpenCV ECC, affine);
+- each tile keeps its fine detail and takes its overall colour from the approved picture, so tiles agree
+  and skin and hair keep the approved colours;
+- on a cut-out the outline is the redraw's, trusted only near the approved outline.
+
+| Backend | Method | Tiles | Time (Rin, measured) |
+|---|---|---|---|
+| codex, openai | **GPT in tiles**: each tile is sent enlarged and soft, and GPT redraws it sharp with nothing moved, transparent background on a cut-out. The owner's choice for SFW. | fewest that keep ≥ 0.8 redraw px per output px, plus the face tile (4 for an 832 x 1367 sprite, 9 for a 1152 x 2016 master) | ~2-5 min, 3 tiles at a time |
+| comfyui | **GPU local in tiles**: SDXL img2img with the character's checkpoint and LoRA, tiles of ~1 MP at exactly 2x, denoise 0.25, face tile at 1024 px or more with denoise 0.2. The only route for NSFW. | 7 for a sprite, 16 for a master | 40-70 s |
+| mock | tiles come back unchanged (tests the cut and join) | | |
+
+- **The rating decides the route.** An image whose rating the studio does not know counts as NSFW when the
+  character has NSFW, so it is finished locally. `--backend` asks for another method (to compare), and a
+  cloud backend is still refused for NSFW.
+- **Denoise is the eyes' enemy.** On Rin's sprite, a face tile at 0.4 redrew her surprised eyes
+  half-closed; on a full-body master, where the face is small and SDXL has more to invent, 0.3 opened her
+  smiling eyes and added a mole, and 0.2 came close (this is what "local models destroy the eyes" means).
+  The face tile defaults to 0.2; put the expression in the prompt (`surprised, wide-eyed`) and never a
+  negative that fights it. A finish from a studio item reuses the item's prompt. GPT in tiles kept the eyes
+  in every test.
+- **A redraw that does not line up is never placed.** The join leaves it out and the tile is drawn again (two
+  more rounds, then the job fails). Codex images are read from the run's own session folder
+  (`~/.codex/generated_images/<session>/`, found by the run's working directory): in a parallel run the
+  agent once copied "the newest image anywhere", which was another tile.
+- **Python**: the cut and the join need Python 3.9+ with numpy, pillow and `opencv-python-headless<5`
+  (OpenCV 5 dropped the face detector). `python3 -m venv tools/.venv && tools/.venv/bin/pip install numpy
+  pillow "opencv-python-headless<5"`, or point `CHARFORGE_PYTHON` at one. The Docker image has it.
+- **Face**: from the item's `face` region, `--face x0,y0,x1,y1`, or found by the anime face detector
+  (tried on several backgrounds; a hand on the cheek can still hide it, and then there is no face tile).
+
+```bash
+pnpm forge finish --char rin --item 812                          # queue it; arrives as a batch with the item as "before"
+pnpm forge finish --char rin --item 812 --backend comfyui        # the other method, to compare
+pnpm forge finish --char rin --init master.png --rating sfw      # run it here, print the file
+```
 
 ## Adding a backend
 

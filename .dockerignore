@@ -5,3 +5,5 @@ renders
 .git
 .claude
 *.log
+tools/.venv
+**/__pycache__

@@ -5,7 +5,7 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { phaseOf } from '../../shared/phases.ts';
 import { isApproval, isDiscovery, REGION_KIND_LABEL, reasonOf } from '../../shared/taxonomy.ts';
 import type { BatchDetail, Box, Item, Pin, Review } from '../../shared/types.ts';
-import { useBatch, useMoreLikeThis, useReopenBatch, useSaveReview, useSubmitBatch } from '../api.ts';
+import { useBatch, useFinish, useMoreLikeThis, useReopenBatch, useSaveReview, useSubmitBatch } from '../api.ts';
 import { useKeys } from '../hooks.ts';
 import { CheckMark, CrossMark } from '../components/marks.tsx';
 import { CountsLine, Filmstrip, Kbd, Loupe, SegmentBar, phaseLabel } from '../components/parts.tsx';
@@ -312,7 +312,7 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
               )}
               <ItemNote key={item.id} value={review.note} onSave={(note) => patch(item, { note })} />
             </fieldset>
-            {Boolean(item.meta.request) && <MoreLikeThis slug={batch.characterSlug} itemId={item.id} />}
+            <ItemJobs slug={batch.characterSlug} item={item} />
             {saveError && <p className="mt-2 text-xs text-mark">Não salvou: {saveError.message}</p>}
           </div>
 
@@ -326,21 +326,39 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
   );
 }
 
-function MoreLikeThis({ slug, itemId }: { slug: string; itemId: number }) {
+const FINISH_METHOD: Record<string, string> = { comfyui: 'GPU local em blocos', codex: 'GPT em blocos', openai: 'GPT em blocos', mock: 'teste' };
+
+/** Jobs that start from this image: more like it, or its 2x finishing. */
+function ItemJobs({ slug, item }: { slug: string; item: Item }) {
+  const request = item.meta.request as { finish?: unknown } | undefined;
+  const finished = Boolean(item.meta.finish);
   const more = useMoreLikeThis(slug);
+  const finish = useFinish(slug);
+  const button = 'shrink-0 rounded-md border border-line px-3 py-1.5 text-xs font-semibold hover:border-faint disabled:opacity-50';
   return (
-    <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
-      <button
-        type="button"
-        disabled={more.isPending || more.isSuccess}
-        onClick={() => more.mutate({ itemId, count: 4 })}
-        className="rounded-md border border-line px-3 py-1.5 text-xs font-semibold hover:border-faint disabled:opacity-50"
-      >
-        Gerar mais 4 parecidas
-      </button>
-      <span className="text-xs text-dim">
-        {more.isSuccess ? 'Na fila. Chegam como um lote novo.' : more.error ? more.error.message : 'Mesmo pedido, sementes novas.'}
-      </span>
+    <div className="mt-4 flex flex-col gap-2.5 border-t border-line pt-4">
+      {request && !request.finish && (
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={more.isPending || more.isSuccess} onClick={() => more.mutate({ itemId: item.id, count: 4 })} className={button}>
+            Gerar mais 4 parecidas
+          </button>
+          <span className="text-xs text-dim">{more.isSuccess ? 'Na fila. Chegam como um lote novo.' : more.error ? more.error.message : 'Mesmo pedido, sementes novas.'}</span>
+        </div>
+      )}
+      {!finished && (
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={finish.isPending || finish.isSuccess} onClick={() => finish.mutate({ itemId: item.id })} className={button}>
+            Ampliar 2×
+          </button>
+          <span className="text-xs text-dim">
+            {finish.isSuccess
+              ? `Na fila: ${FINISH_METHOD[finish.data.backend] ?? finish.data.backend}. Chega como um lote novo, com esta como "antes".`
+              : finish.error
+                ? finish.error.message
+                : `Redesenha em blocos com o dobro da resolução, ${item.width * 2} × ${item.height * 2}.`}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

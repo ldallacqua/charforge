@@ -1,12 +1,12 @@
 // The owner's local Codex CLI, logged in with a ChatGPT plan: it generates with the built-in image tool,
-// so no API key is needed (this is how Siren Siege's art was made). SFW only. About 60-70 s per image;
-// images are made one after another.
+// so no API key is needed (this is how Siren Siege's art was made). SFW only. About 60-100 s per image.
+// The image is taken from the run's own session folder, so parallel runs (finishing tiles) never swap.
 //
 // Machine settings (env): CODEX_BIN. Found automatically on PATH or inside the ChatGPT app on macOS.
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, join } from 'node:path';
 import sharp from 'sharp';
@@ -30,6 +30,15 @@ function orientation(req: RenderRequest): string {
 }
 
 export function codexRequest(req: RenderRequest, refs: string[]): string {
+  if (req.edit && req.init) {
+    // Edit mode (finishing tiles): the attached image is the image tool's input image. Worded as in
+    // Siren Siege's gpt_tiles.sh, which is what made the tool redraw instead of re-imagining.
+    return [
+      `Call your built-in image generation tool exactly once, with the attached image (also at ./ref/${basename(req.init)}) as the input image${req.transparent ? ' and with transparent_background set to true' : ''}, and use this instruction for it: '${req.prompt.replace(/'/g, '’')}'`,
+      'Then copy the PNG the tool saved for that call (its exact saved path, nothing else) to ./out/image.png, unchanged and with its alpha channel, and stop.',
+      'Do not write or run any code that creates or edits images. The only command you may run is the file copy. Do not read or change any other file.',
+    ].join(' ');
+  }
   return [
     'Use your built-in image generation tool to create exactly ONE image.',
     'Then copy the PNG file to ./out/image.png and do nothing else. Do not create or change any other file.',
@@ -65,19 +74,51 @@ function run(bin: string, args: string[], input: string, timeoutMs: number): Pro
   });
 }
 
-/** Fallback: the newest image Codex wrote to its own folder during this run. */
-async function newestGenerated(since: number): Promise<string | null> {
-  const root = join(homedir(), '.codex', 'generated_images');
-  if (!existsSync(root)) return null;
-  let best: { f: string; t: number } | null = null;
-  for (const dir of await readdir(root)) {
-    const d = join(root, dir);
-    if (!(await stat(d)).isDirectory()) continue;
-    for (const f of await readdir(d)) {
-      if (!/\.(png|webp|jpe?g)$/i.test(f)) continue;
-      const t = (await stat(join(d, f))).mtimeMs;
-      if (t >= since && (!best || t > best.t)) best = { f: join(d, f), t };
+const codexHome = () => process.env.CODEX_HOME ?? join(homedir(), '.codex');
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * The session this run created: the rollout (CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl)
+ * whose first line names this run's working directory. Runs go in parallel (finishing tiles), so
+ * "the newest image" is not this run's image; the session is.
+ */
+export async function sessionOf(wd: string, since: number): Promise<string | null> {
+  const root = join(codexHome(), 'sessions');
+  const days = new Set<string>();
+  for (let t = since - 86_400_000; t <= Date.now() + 86_400_000; t += 86_400_000) {
+    const d = new Date(t);
+    days.add(join(String(d.getFullYear()), pad(d.getMonth() + 1), pad(d.getDate())));
+  }
+  const needles = [`"cwd":${JSON.stringify(wd)}`, `/${basename(wd)}"`];
+  for (const day of days) {
+    const dir = join(root, day);
+    if (!existsSync(dir)) continue;
+    for (const f of await readdir(dir)) {
+      const id = /^rollout-.*-([0-9a-f]{8}-[0-9a-f-]{27})\.jsonl$/.exec(f)?.[1];
+      if (!id || (await stat(join(dir, f))).mtimeMs < since - 5_000) continue;
+      const fh = await open(join(dir, f));
+      try {
+        const { bytesRead, buffer } = await fh.read(Buffer.alloc(4096), 0, 4096, 0);
+        const head = buffer.subarray(0, bytesRead).toString('utf8');
+        if (needles.some((n) => head.includes(n))) return id;
+      } finally {
+        await fh.close();
+      }
     }
+  }
+  return null;
+}
+
+/** The newest image the image tool saved in this session (CODEX_HOME/generated_images/<session>/). */
+async function sessionImage(id: string | null): Promise<string | null> {
+  if (!id) return null;
+  const dir = join(codexHome(), 'generated_images', id);
+  if (!existsSync(dir)) return null;
+  let best: { f: string; t: number } | null = null;
+  for (const f of await readdir(dir)) {
+    if (!/\.(png|webp|jpe?g)$/i.test(f)) continue;
+    const t = (await stat(join(dir, f))).mtimeMs;
+    if (!best || t > best.t) best = { f: join(dir, f), t };
   }
   return best?.f ?? null;
 }
@@ -105,9 +146,13 @@ export const codex: Backend = {
         await writeFile(join(wd, 'request.txt'), request);
         const started = Date.now();
         log(`codex: image ${i + 1}/${req.count ?? 1} (about a minute)`);
-        await run(bin, ['exec', '-C', wd, '--approve-for-me', '--skip-git-repo-check', '-'], request, timeoutMs);
+        const attach = req.edit && req.init ? ['--image', join(wd, 'ref', basename(req.init)), '--'] : [];
+        await run(bin, ['exec', '-C', wd, '--approve-for-me', '--skip-git-repo-check', ...attach, '-'], request, timeoutMs);
+        // The image the tool saved in this run's own session is the truth: the agent's copy to ./out
+        // has been seen to grab another parallel run's image. ./out only when the session is not found.
+        const fromSession = await sessionImage(await sessionOf(wd, started));
         const made = (await readdir(join(wd, 'out'))).filter((f) => /\.(png|webp|jpe?g)$/i.test(f));
-        const src = made.length ? join(wd, 'out', made[0]) : await newestGenerated(started);
+        const src = fromSession ?? (made.length ? join(wd, 'out', made[0]) : null);
         if (!src) throw new Error('codex finished but no image was found');
         const file = join(outDir, `codex-${Date.now()}-${i}.png`);
         await sharp(src).png().toFile(file);

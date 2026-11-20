@@ -29,12 +29,33 @@ export interface RenderRequest {
   transparent?: boolean;
   /** image to start from (img2img / edit) */
   init?: string;
+  /** `init` is the picture to change (the GPT image tool's input image), not a loose reference */
+  edit?: boolean;
+  /** finish `init` instead of rendering: enlarge it by redrawing it in tiles (src/render/finish.ts) */
+  finish?: FinishSpec;
   /** img2img strength for diffusion backends (0..1) */
   denoise?: number;
   /** reference images (identity, style) for backends that take them */
   references?: string[];
   /** per-request backend overrides (steps, cfg, loras, quality...) */
   options?: Record<string, unknown>;
+}
+
+/** The finishing step: an approved picture enlarged `scale` times by redrawing it in overlapping tiles. */
+export interface FinishSpec {
+  /** 2 by default */
+  scale?: number;
+  /** the face, [x0, y0, x1, y1] in the picture's pixels; found automatically when left out */
+  face?: [number, number, number, number] | null;
+  /** sd: denoise of the grid tiles (0.25) and of the face tile (0.2); higher changes the eyes */
+  denoise?: number;
+  faceDenoise?: number;
+  /** gpt: least redraw pixels per output pixel (0.8); higher means more tiles */
+  density?: number;
+  /** the source item's regions (loupes), carried to the result at the new scale */
+  regions?: { id?: string; kind: string; label: string; box: [number, number, number, number] }[];
+  /** the studio item this picture came from */
+  sourceItem?: number;
 }
 
 export interface RenderOutput {

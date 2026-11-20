@@ -24,8 +24,10 @@ Rendering backends and profiles are in [RENDERING.md](RENDERING.md); models and 
 4. **One base body per pose, outfits as layers** (inpaint), expressions as a face-only pass. Outfit
    changes then do not make the sprite jump.
 5. **Every final image gets the finishing chain:** a hires pass (1.5x at denoise 0.4) and a face pass;
-   hands get a 2x detail pass; game art gets a 2x upscale. A single 1 MP pass gives soft faces and broken
-   hands, which is most of what makes images look AI-made.
+   hands get a 2x detail pass; and every approved master is **finished at 2x in tiles** (`forge finish`,
+   [RENDERING.md](RENDERING.md#finishing-2x-in-tiles)) before it is cropped. A single 1 MP pass gives soft
+   faces and broken hands, which is most of what makes images look AI-made; a crop of an unfinished
+   full-body master is enlarged (~1.15x from a GPU master, ~1.5x from a GPT one) and looks soft.
 6. **Clean prompts:** 15-30 tags, spaces not underscores, one framing, no repeated appearance (the LoRA
    and the character prompt already carry it). Contradicting framings produce split, two-panel images.
 7. **Adults only:** adult in the brief and the card, `mature female, adult` (or male) in every prompt,
@@ -212,16 +214,23 @@ Two sets = 56 sprites; a third set adds 28.
 5. **Hands near the face come from the base**: the face pass redraws anything near the face and creates
    ghost fingers. Paste the approved base hand (polygon) over every expression, and restore everything
    below the chin from the base (necklaces change colour between expressions otherwise).
-6. **Cutout**: render on flat white and run `tools/cutout2.py` (pockets, halo, edge colour), or use a
-   backend with native transparency. Check on dark and magenta backgrounds.
-7. **Display crop and normalisation**: for SillyTavern, crop the master to 832 x 1367 with face width
-   F = 265 px and face top T = 316 px, figure running off the bottom edge (same scale and position for
-   every sprite, or they jump). Keep the masters.
-8. **Automatic QA**: `tools/qa_sprites.py <folder> --face --sheet flagged.png` must PASS; look at every
+6. **Finish at 2x** (`forge finish`): GPT in tiles for SFW, GPU local in tiles for NSFW (the owner chose
+   the method per character; see [RENDERING.md](RENDERING.md#finishing-2x-in-tiles)). A full-body master
+   at 1152 x 2016 has a face box ~230 px wide (~175 px at GPT's 1024 x 1536), and the display crop needs
+   265 px: without this step the crop is enlarged and soft. **Finish the base of each pose once**, then for each expression finish only the
+   head and paste it on the finished base, restoring everything below the chin from it as in step 5: a
+   whole-image redraw per expression would let hands and jewellery drift between expressions. Compare
+   with the unfinished picture (key C) at 3x before going on: eyes, fingers, outline, skin colour.
+7. **Cutout** of the finished picture: render on flat white and run `tools/cutout2.py` (pockets, halo,
+   edge colour), or use a backend with native transparency. Check on dark and magenta backgrounds.
+8. **Display crop and normalisation**: for SillyTavern, crop the finished master to 832 x 1367 with face
+   width F = 265 px and face top T = 316 px, figure running off the bottom edge (same scale and position
+   for every sprite, or they jump). The crop must shrink the master, never enlarge it. Keep the masters.
+9. **Automatic QA**: `tools/qa_sprites.py <folder> --face --sheet flagged.png` must PASS; look at every
    flagged crop. Waivers (art that looks like a defect, such as a white rim light inside the line art)
    go into a waivers file with a reason and date.
-9. **Your zoomed review**: `tools/qa_zoom.py` sheets, each hand >= 400 px tall on screen. Count fingers.
-10. **Submit** one review batch per set or per pose, with regions: every hand, eyes, face, feet (full
+10. **Your zoomed review**: `tools/qa_zoom.py` sheets, each hand >= 400 px tall on screen. Count fingers.
+11. **Submit** one review batch per set or per pose, with regions: every hand, eyes, face, feet (full
     body), horns, wings and tail when visible, plus edge spots the automatic QA flagged. Same region
     label for the same body part across expressions (the studio keeps the loupe on it while the owner
     flips images, which is how inconsistent hands get caught).
