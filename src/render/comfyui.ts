@@ -7,7 +7,8 @@
 // Machine settings (env): COMFYUI_URL. Character settings (profile options): checkpoint, loras,
 // quality, negativeBase, steps, cfg, sampler, scheduler, clipSkip, hires, face, workflow.
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import sharp from 'sharp';
 import { tiles } from './python.ts';
@@ -154,7 +155,9 @@ async function facePass(o: Opts, req: RenderRequest, file: string, seed: number,
   const side = Math.round(Math.min(W, H, Math.max(fw, fh) * o.face.context));
   const left = Math.round(Math.min(Math.max(fx + fw / 2 - side / 2, 0), W - side));
   const top = Math.round(Math.min(Math.max(fy + fh / 2 - side / 2, 0), H - side));
-  const crop = `${file}.face.png`;
+  // the crop is a working file: never next to the output, where a glob for the picture would find it
+  const work = await mkdtemp(join(tmpdir(), 'charforge-face-'));
+  const crop = join(work, 'face.png');
   await sharp(file).extract({ left, top, width: side, height: side }).resize(o.face.size, o.face.size, { kernel: 'lanczos3' }).png().toFile(crop);
   const name = await upload(o.url, crop);
   const fo: Opts = { ...o, hires: false, steps: o.face.steps, sampler: 'dpmpp_2m', scheduler: 'karras' };
@@ -165,6 +168,7 @@ async function facePass(o: Opts, req: RenderRequest, file: string, seed: number,
   const patch = await sharp(await sharp(drawn).resize(side, side, { kernel: 'lanczos3' }).ensureAlpha().png().toBuffer()).composite([{ input: mask, blend: 'dest-in' }]).png().toBuffer();
   const merged = await sharp(file).composite([{ input: patch, left, top }]).png().toBuffer();
   await writeFile(file, merged);
+  await rm(work, { recursive: true, force: true });
   return { box: [left, top, left + side, top + side], denoise: o.face.denoise, size: o.face.size };
 }
 

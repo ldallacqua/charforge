@@ -351,6 +351,9 @@ repeating one is not). Where a check or a default can prevent it, add that too a
    *Fixed in code:* rejections inside a signed-off gate are settled.
 9. **A zsh loop over `$ids` ran once** with every id as one word (zsh does not split unquoted variables).
    *Fixed:* use `${=ids}` or bash; AGENTS.md.
+10. **The face pass left its crop next to the picture** (`comfyui-<seed>.png.face.png`), and a contact sheet
+    globbing `comfyui-*.png` showed the crops instead of the pictures. *Fixed in code:* the crop lives in a
+    temporary folder and is deleted. Contact sheets read the file named in `render.json`, never a glob.
 
 ### From the first character (Rin V1)
 
