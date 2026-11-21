@@ -8,7 +8,6 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const SCRIPT = join(ROOT, 'tools', 'tiles.py');
 
 export function findPython(): string {
   if (process.env.CHARFORGE_PYTHON) return process.env.CHARFORGE_PYTHON;
@@ -18,10 +17,11 @@ export function findPython(): string {
 
 const SETUP = 'python3 -m venv tools/.venv && tools/.venv/bin/pip install numpy pillow "opencv-python-headless<5" (or set CHARFORGE_PYTHON)';
 
-export function tiles(args: string[]): Promise<Record<string, unknown>> {
+/** Run tools/<script> and return the JSON object it prints last. */
+export function runTool(script: string, args: string[]): Promise<Record<string, unknown>> {
   const python = findPython();
   return new Promise((resolve_, reject) => {
-    const p = spawn(python, ['-I', SCRIPT, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(python, ['-I', join(ROOT, 'tools', script), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
     p.stdout.on('data', (d) => (out += d));
@@ -30,15 +30,17 @@ export function tiles(args: string[]): Promise<Record<string, unknown>> {
     p.on('close', (code) => {
       if (code !== 0) {
         const missing = /No module named '(\w+)'/.exec(err);
-        return reject(new Error(missing ? `${python} has no ${missing[1]}: ${SETUP}` : `tools/tiles.py ${args[0]} failed: ${err.trim().split('\n').slice(-3).join(' ')}`));
+        return reject(new Error(missing ? `${python} has no ${missing[1]}: ${SETUP}` : `tools/${script} ${args[0]} failed: ${err.trim().split('\n').slice(-3).join(' ')}`));
       }
       const last = out.trim().split('\n').pop() ?? '{}';
       try {
         resolve_(JSON.parse(last));
       } catch {
-        reject(new Error(`tools/tiles.py ${args[0]} printed no result: ${last}`));
+        reject(new Error(`tools/${script} ${args[0]} printed no result: ${last}`));
       }
     });
   });
 }
 
+
+export const tiles = (args: string[]) => runTool('tiles.py', args);

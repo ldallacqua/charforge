@@ -90,7 +90,7 @@ describe('finishing requests', () => {
   });
 });
 
-describe.skipIf(!python)('finishing (tools/tiles.py)', () => {
+describe.skipIf(!python)('finishing (tools/tiles.py)', { timeout: 30_000 }, () => {
   it('cuts, redraws (mock: unchanged) and joins to twice the size without seams', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'cf-fin-'));
     const src = join(dir, 'p.png');

@@ -9,3 +9,6 @@ data/
 renders/
 tools/.venv/
 __pycache__/
+
+# hand detector model (tools/hands.py), downloaded, not in git
+tools/models/

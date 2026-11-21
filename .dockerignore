@@ -8,3 +8,4 @@ renders
 tools/.venv
 **/__pycache__
 .env
+tools/models

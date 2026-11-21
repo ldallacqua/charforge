@@ -3,15 +3,18 @@
 // then a face pass: the face is found, redrawn at 1024 px with the same LoRA and pasted back. In a
 // full-body render the face is ~130 px wide even after hires, and SDXL draws eyes, ears and mouth badly
 // at that size (Rin V2's LoRA test: every full-body image rejected for its eyes, the close-up approved).
+// Then a hand pass: every hand ADetailer's hand model finds (tools/hands.py) is redrawn the same way; the
+// next LoRA test rejected every nude, POV and parity image for hands. Skipped when the detector is not
+// installed.
 //
 // Machine settings (env): COMFYUI_URL. Character settings (profile options): checkpoint, loras,
-// quality, negativeBase, steps, cfg, sampler, scheduler, clipSkip, hires, face, workflow.
+// quality, negativeBase, steps, cfg, sampler, scheduler, clipSkip, hires, face, hands, workflow.
 
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import sharp from 'sharp';
-import { tiles } from './python.ts';
+import { runTool, tiles } from './python.ts';
 import type { Backend, Log, RenderOutput, RenderRequest } from './types.ts';
 
 const DEFAULTS = {
@@ -28,6 +31,10 @@ const DEFAULTS = {
   hires: { scale: 1.5, denoise: 0.4, steps: 20 } as { scale: number; denoise: number; steps: number } | false,
   /** the face pass: crop `context` x the face, redraw at `size` px at `denoise`, paste back feathered */
   face: { denoise: 0.5, size: 1024, context: 1.6, steps: 24 } as { denoise: number; size: number; context: number; steps: number } | false,
+  /** the hand pass: each hand found at `conf` or more (at most `max`), cropped at `context` x its box, redrawn the same way */
+  hands: { denoise: 0.45, size: 1024, context: 1.8, steps: 24, conf: 0.35, max: 4 } as
+    | { denoise: number; size: number; context: number; steps: number; conf: number; max: number }
+    | false,
   timeoutSec: 600,
 };
 
@@ -140,7 +147,44 @@ export function facePrompt(prompt: string): string {
   return [...tags, 'portrait, close-up, face focus, detailed eyes, detailed face'].join(', ');
 }
 
-/** Redraw the face of `file` in place: crop, upscale, img2img with the same LoRA, feathered paste. */
+/** The render's prompt for a hand crop. */
+export function handPrompt(prompt: string): string {
+  const tags = prompt.split(',').map((t) => t.trim()).filter((t) => t && !FRAMING.test(t.toLowerCase()));
+  return [...tags, 'close-up, hand focus, detailed hand, five fingers, detailed fingers, fingernails'].join(', ');
+}
+
+/**
+ * Redraw a square region of `file` in place: crop it, upscale to `size`, img2img with the render's LoRA
+ * and a deterministic sampler, scale back and paste it with a feathered ellipse. Returns the region.
+ */
+async function redrawRegion(o: Opts, req: RenderRequest, file: string, seed: number, log: Log, r: {
+  cx: number; cy: number; side: number; prompt: string; negative: string; denoise: number; size: number; steps: number; what: string;
+}): Promise<[number, number, number, number]> {
+  const m = await sharp(file).metadata();
+  const W = m.width ?? 0;
+  const H = m.height ?? 0;
+  const side = Math.round(Math.min(W, H, r.side));
+  const left = Math.round(Math.min(Math.max(r.cx - side / 2, 0), W - side));
+  const top = Math.round(Math.min(Math.max(r.cy - side / 2, 0), H - side));
+  // the crop is a working file: never next to the output, where a glob for the picture would find it
+  const work = await mkdtemp(join(tmpdir(), 'charforge-detail-'));
+  try {
+    const crop = join(work, 'crop.png');
+    await sharp(file).extract({ left, top, width: side, height: side }).resize(r.size, r.size, { kernel: 'lanczos3' }).png().toFile(crop);
+    const name = await upload(o.url, crop);
+    const fo: Opts = { ...o, hires: false, steps: r.steps, sampler: 'dpmpp_2m', scheduler: 'karras' };
+    const graph = buildGraph(fo, { ...req, prompt: r.prompt, negative: r.negative, width: r.size, height: r.size, denoise: r.denoise }, seed, name);
+    const drawn = await runGraph(fo, graph, log, `${r.what}, seed ${seed}`);
+    const mask = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${side}" height="${side}"><defs><filter id="f"><feGaussianBlur stdDeviation="${side * 0.05}"/></filter></defs><ellipse cx="${side / 2}" cy="${side / 2}" rx="${side * 0.38}" ry="${side * 0.42}" fill="#fff" filter="url(#f)"/></svg>`);
+    const patch = await sharp(await sharp(drawn).resize(side, side, { kernel: 'lanczos3' }).ensureAlpha().png().toBuffer()).composite([{ input: mask, blend: 'dest-in' }]).png().toBuffer();
+    await writeFile(file, await sharp(file).composite([{ input: patch, left, top }]).png().toBuffer());
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+  return [left, top, left + side, top + side];
+}
+
+/** The face pass: the most confident face (1.8 or more), redrawn at `face.size` px. */
 async function facePass(o: Opts, req: RenderRequest, file: string, seed: number, log: Log): Promise<Record<string, unknown> | null> {
   if (!o.face) return null;
   const found = (await tiles(['face', file])) as { face: [number, number, number, number] | null };
@@ -149,27 +193,33 @@ async function facePass(o: Opts, req: RenderRequest, file: string, seed: number,
     return null;
   }
   const [fx, fy, fw, fh] = found.face;
-  const m = await sharp(file).metadata();
-  const W = m.width ?? 0;
-  const H = m.height ?? 0;
-  const side = Math.round(Math.min(W, H, Math.max(fw, fh) * o.face.context));
-  const left = Math.round(Math.min(Math.max(fx + fw / 2 - side / 2, 0), W - side));
-  const top = Math.round(Math.min(Math.max(fy + fh / 2 - side / 2, 0), H - side));
-  // the crop is a working file: never next to the output, where a glob for the picture would find it
-  const work = await mkdtemp(join(tmpdir(), 'charforge-face-'));
-  const crop = join(work, 'face.png');
-  await sharp(file).extract({ left, top, width: side, height: side }).resize(o.face.size, o.face.size, { kernel: 'lanczos3' }).png().toFile(crop);
-  const name = await upload(o.url, crop);
-  const fo: Opts = { ...o, hires: false, steps: o.face.steps, sampler: 'dpmpp_2m', scheduler: 'karras' };
-  const graph = buildGraph(fo, { ...req, prompt: facePrompt(req.prompt), width: o.face.size, height: o.face.size, denoise: o.face.denoise }, seed, name);
-  const drawn = await runGraph(fo, graph, log, `face pass, seed ${seed}`);
-  // feathered ellipse: the redraw replaces the face and fades out before the crop's edge
-  const mask = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${side}" height="${side}"><defs><filter id="f"><feGaussianBlur stdDeviation="${side * 0.05}"/></filter></defs><ellipse cx="${side / 2}" cy="${side / 2}" rx="${side * 0.38}" ry="${side * 0.42}" fill="#fff" filter="url(#f)"/></svg>`);
-  const patch = await sharp(await sharp(drawn).resize(side, side, { kernel: 'lanczos3' }).ensureAlpha().png().toBuffer()).composite([{ input: mask, blend: 'dest-in' }]).png().toBuffer();
-  const merged = await sharp(file).composite([{ input: patch, left, top }]).png().toBuffer();
-  await writeFile(file, merged);
-  await rm(work, { recursive: true, force: true });
-  return { box: [left, top, left + side, top + side], denoise: o.face.denoise, size: o.face.size };
+  const box = await redrawRegion(o, req, file, seed, log, {
+    cx: fx + fw / 2, cy: fy + fh / 2, side: Math.max(fw, fh) * o.face.context, prompt: facePrompt(req.prompt), negative: req.negative ?? '',
+    denoise: o.face.denoise, size: o.face.size, steps: o.face.steps, what: 'face pass',
+  });
+  return { box, denoise: o.face.denoise, size: o.face.size };
+}
+
+const HAND_NEGATIVE = 'extra fingers, missing fingers, fused fingers, extra digits, fewer digits, bad hands, deformed hands';
+
+/** The hand pass: every hand the detector finds, most confident first, each redrawn at `hands.size` px. */
+async function handPass(o: Opts, req: RenderRequest, file: string, seed: number, log: Log): Promise<Record<string, unknown>[] | null> {
+  if (!o.hands) return null;
+  const found = (await runTool('hands.py', [file, '--conf', String(o.hands.conf)])) as { hands: number[][]; error?: string };
+  if (found.error) {
+    log(`comfyui: hand pass skipped (${found.error})`);
+    return null;
+  }
+  const done: Record<string, unknown>[] = [];
+  for (const [i, [x0, y0, x1, y1, conf]] of found.hands.slice(0, o.hands.max).entries()) {
+    const box = await redrawRegion(o, req, file, seed + 1 + i, log, {
+      cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, side: Math.max(x1 - x0, y1 - y0, 64) * o.hands.context, prompt: handPrompt(req.prompt),
+      negative: [req.negative, HAND_NEGATIVE].filter(Boolean).join(', '), denoise: o.hands.denoise, size: o.hands.size, steps: o.hands.steps,
+      what: `hand pass ${i + 1}`,
+    });
+    done.push({ box, found: [x0, y0, x1, y1], conf });
+  }
+  return done;
 }
 
 export const comfyui: Backend = {
@@ -190,9 +240,11 @@ export const comfyui: Backend = {
       const file = join(outDir, `comfyui-${seed}.png`);
       await writeFile(file, data);
       // the face pass belongs to a new picture; an img2img (finishing tiles, edits) keeps its face as sent
-      const face = !initName && !o.workflow ? await facePass(o, req, file, seed, log) : null;
+      const fresh = !initName && !o.workflow;
+      const face = fresh ? await facePass(o, req, file, seed, log) : null;
+      const hands = fresh ? await handPass(o, req, file, seed, log) : null;
       const m = await sharp(file).metadata();
-      out.push({ file, width: m.width ?? 0, height: m.height ?? 0, seed, backend: 'comfyui', meta: { checkpoint: o.checkpoint, loras: o.loras, steps: o.steps, cfg: o.cfg, hires: o.hires, face } });
+      out.push({ file, width: m.width ?? 0, height: m.height ?? 0, seed, backend: 'comfyui', meta: { checkpoint: o.checkpoint, loras: o.loras, steps: o.steps, cfg: o.cfg, hires: o.hires, face, hands } });
     }
     return out;
   },

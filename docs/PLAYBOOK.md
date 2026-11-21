@@ -361,6 +361,12 @@ repeating one is not). Where a check or a default can prevent it, add that too a
     for hands, equally in every epoch: that is the missing hand pass, not the LoRA. Pick the epoch on
     identity (face, ornaments, outfit, other outfits) and fix hands with the hand pass (G5 step 2) before
     showing hands to the owner.
+13. **No hand pass on local renders.** *Fixed in code:* `forge render` on ComfyUI redraws every hand the
+    detector finds (RENDERING.md). It makes soft and fused fingers clean; it redraws over the hand that is
+    there, so a wrong hand shape can survive: still count fingers before submitting.
+14. **Installing ultralytics replaced the OpenCV build** (it pins numpy 1.x; OpenCV 4.12+ needs numpy 2):
+    two cv2 packages ended up installed. *Fixed:* one build, `opencv-python==4.11.0.86` (tools/README.md),
+    and `pip check` after any install into tools/.venv.
 
 ### From the first character (Rin V1)
 
