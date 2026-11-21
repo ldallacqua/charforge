@@ -114,6 +114,9 @@ accessory wings tail edge other`. Phases `g0`-`g8`. Check status `pass warn fail
 - **Secrets** (API keys) only in the environment of the rendering machine. Never in profiles, manifests,
   notes, commits or the UI.
 - **Never commit `data/`** (images, some NSFW, and the database) or renders.
+- **Derive, never re-roll** (V2): every pose, outfit and expression starts from the approved master or a
+  finished body; sprites are built in layers (bodies, masked expressions, outfits below the chin) at one
+  scale. PLAYBOOK principles 1-5.
 - **Full-body masters** for sprites; display crops come from the master **after the 2x finish**
   (`forge finish`): a crop must shrink the master, never enlarge it. Feet get a region.
 - **Finishing**: GPT in tiles for SFW, GPU local in tiles for NSFW; keep the face tile's denoise at 0.2 (the default) or

@@ -15,29 +15,40 @@ Rendering backends and profiles are in [RENDERING.md](RENDERING.md); models and 
 
 ## Principles
 
-1. **Order: design, then LoRA, then every asset.** Never sprites before the LoRA. The first character
-   (Rin) did it the other way round and every sprite was redone.
-2. **Identity anchors:** 3 to 5 strong, model-readable features (hair cut and colour, eye colour, horns,
-   one signature accessory). Fine detail (a thin tiara, a small cutout) drifts until there is a LoRA.
-3. **Control, not lottery:** pose and composition come from a skeleton, a sketch or an approved image
-   (ControlNet or img2img), not from the seed.
-4. **One base body per pose, outfits as layers** (inpaint), expressions as a face-only pass. Outfit
-   changes then do not make the sprite jump.
-5. **Every final image gets the finishing chain:** a hires pass (1.5x at denoise 0.4) and a face pass;
-   hands get a 2x detail pass; and every approved master is **finished at 2x in tiles** (`forge finish`,
-   [RENDERING.md](RENDERING.md#finishing-2x-in-tiles)) before it is cropped. A single 1 MP pass gives soft
-   faces and broken hands, which is most of what makes images look AI-made; a crop of an unfinished
-   full-body master is enlarged (~1.15x from a GPU master, ~1.5x from a GPT one) and looks soft.
-6. **Clean prompts:** 15-30 tags, spaces not underscores, one framing, no repeated appearance (the LoRA
-   and the character prompt already carry it). Contradicting framings produce split, two-panel images.
-7. **Adults only:** adult in the brief and the card, `mature female, adult` (or male) in every prompt,
+Since Rin V2 (November 2026) the method is **one design, derived everywhere, built in layers**. The review
+that led to it is in the owner's homelab (`sillytavern/docs/characters/review-v2/REVIEW.md`): every V1
+sprite was a separate drawing, so six poses showed six slightly different Rins.
+
+1. **Order: design lock, then layout, then LoRA, then every asset.** On the local route never render a
+   sprite before the LoRA. With a cloud SFW backend, the SFW pose bodies come right after the layout (GPT
+   edits of the master) and go into the dataset.
+2. **Design for the model:** 3 to 5 strong anchors (hair cut and colour, eye colour, horns, one signature
+   accessory). Ornaments big and simple, one repeated motif (Rin: the same heart-shaped ruby on the circlet
+   and the choker), every accent the same colour, and every optional piece decided (earrings: yes or no).
+   Fine detail drifts.
+3. **Derive, never re-roll:** every pose, outfit and expression starts from the approved master or from a
+   finished body, not from a fresh seed (GPT edit with the master attached, or a skeleton + LoRA locally).
+4. **Layered production, flat export:** a few finished bodies per outfit; expressions are masked eyes,
+   brows and mouth on the finished body; other outfits are inpainted below the chin under the same head.
+   Pixels outside a part's mask stay identical to the base. One scale and one anchor for every sprite.
+   Composite flat images for the target app and keep the layers (Ren'Py `layeredimage`, Live2D later).
+5. **Counts are per project:** how many bodies and expressions a character gets comes from where it is
+   used (SillyTavern: ~3 bodies x 16 expressions; a game: what its script calls for). Layers multiply: a
+   new body later reuses every expression drawn at the same head angle.
+6. **Every final image gets the finishing chain:** a hires pass (1.5x at denoise 0.4) and a face pass on
+   local renders; and every approved body is **finished at 2x in tiles once** (`forge finish`,
+   [RENDERING.md](RENDERING.md#finishing-2x-in-tiles)) before anything is drawn on it or cropped from it.
+7. **A style bible is pasted into every request:** palette (hex per material), line, shading, light, eye
+   highlights. Prompts stay clean: 15-30 tags (or a short paragraph for GPT), one framing, no repeated
+   appearance. Contradicting framings produce split images.
+8. **Adults only:** adult in the brief and the card, `mature female, adult` (or male) in every prompt,
    `loli, child, underage` in every negative. A concept that reads young is rejected (`concept.young`).
-8. **Full-body masters:** every pose is rendered head to feet with margin; smaller framings are crops
-   of the master. The feet get reviewed like the hands.
-9. **The owner reviews in the studio, after you.** Run the automatic checks and your own zoomed review
-   first. Never send something an automatic check would catch.
-10. **Reproducible:** every prompt, seed and parameter is in the item's `meta` (`forge render --submit`
-    does it); scripts live in the repository, never only in a temp folder.
+9. **Full-body masters on a plain mid-grey background, no floor shadow:** smaller framings are crops.
+   White backgrounds leave a light rim on the cut-out. The feet get reviewed like the hands.
+10. **The owner reviews in the studio, after you.** Run the automatic checks and your own zoomed review
+    first. Never send something an automatic check would catch.
+11. **Reproducible:** every prompt, seed and parameter is in the item's `meta` (`forge render --submit`
+    does it); scripts live with the character's files, never only in a temp folder.
 
 ---
 
@@ -122,24 +133,59 @@ diffusion backends). Say in the batch notes which parts came from where.
 **Round 3, convergence (3-4 variations of one design).** Small changes only. Then a **pick batch** for
 the master image. Apply the finishing chain to the master.
 
-**Reference sheet** from the master: front, side and back full body, a face close-up, 6 expressions,
-callouts of the anchors. One request per view, always with the master as reference
-("same character, side view, full body, white background"). Local reference editing (Qwen-Image 2.1,
-FLUX 3 Klein) or the cloud backend; img2img of the master at 0.5-0.6 as a fallback (weak for backs).
+**Design lock** (after the master pick), signed off as one gate:
+- **Finish the master** at 2x (`forge finish`).
+- **Reference sheet**: front, side and back full body, a face close-up. One request per view, always with
+  the master attached ("same character, side view, full body, mid-grey background").
+- **Ornament detail sheet**: each piece large, one per image, the master attached: circlet front and
+  side, the gem, horns from the side, tail tip, wing claw, sleeve cuff, shoes, a hand with the nails.
+- **Style bible** (one page in the character's folder): the palette sampled from the finished master
+  (k-means, then frozen as hex per material: hair base, shadow and highlight, iris, skin, dress, trim,
+  gem, gold, horns, wings, nails), line colour and weight, shading ("two-tone cel, one soft gradient, no
+  gloss bands"), key light direction, rim light (thin and coloured, inside the line art, or none), eye
+  highlights. Its prompt block goes first in every later request.
 
-**Anchors test, always on the local model** (even when SFW is rendered in the cloud, because NSFW and
-chat CGs come from the local GPU): 20 images from the appearance text only, no LoRA, no reference,
-5 scenes x 4 seeds. Submit as a review batch with face and hair regions. **Passes** when each anchor
-appears in at least 70 % of the 20; otherwise simplify the anchor (bigger, higher contrast) and repeat.
-The owner signs off G2.
+**Anchors test, always on the local model** (NSFW and chat CGs come from the local GPU): 20 images from
+the appearance text only, no LoRA, no reference, 5 scenes x 4 seeds, plus 4 ornament close-ups. Submit
+as a review batch with face, hair and ornament regions. **Passes** when each anchor appears in at least
+70 % of the 20; otherwise simplify the anchor (bigger, higher contrast) and repeat.
+
+## G2.5: layout (bodies, expressions, canvas)
+
+Decided before the dataset, so the dataset can contain the real sprite bodies and heads.
+
+- **Canvas template**: one scale for the character, from the master (crown-to-chin height), and one
+  anchor (the neck point at a fixed x, the figure running off the bottom edge). Every body is drawn on it;
+  QA checks `|s_pose / s_master - 1| < 0.02`.
+- **Bodies** (how many: principle 5). Choose poses where every hand either reads in silhouette against a
+  contrasting value or is hidden (behind the hip, tucked under crossed arms); no fingers lying on skin of
+  the same colour; no hand within one face-width of the face (every expression pass would redraw it).
+  One head angle per body, looking at the viewer.
+- **Expression sheet**: every expression drawn on the master's head at each body's head angle, as masked
+  edits of eyes, brows and mouth only. The owner names each face unlabelled at sprite size; two faces that
+  get confused twice merge. Blush only where the label asks for it.
+- **For SillyTavern**, 16 expressions on 3 bodies as custom expressions (the classifier then only picks
+  labels that exist: Expressions settings, "only available"): neutral, smug, happy, laughing, teasing,
+  seductive, tender, curious (signature body); annoyed, angry, disgusted (closed body); flustered,
+  surprised, scared, sad, crying (shaken body). If the 28 go_emotions labels are needed (local
+  classifier), copy files under those names: pride and approval = smug; optimism and joy = happy;
+  amusement and excitement = laughing; desire = seductive; love, caring, gratitude, relief and admiration =
+  tender; curiosity, confusion and realization = curious; annoyance, disapproval and disappointment =
+  annoyed; embarrassment and nervousness = flustered; fear = scared; sadness and remorse = sad; grief =
+  crying. Each expression may get a blink frame (animated WebP or APNG; SillyTavern accepts any image).
+
+Submit the bodies as a pick batch and the expression sheet as a review batch. The owner then signs off
+G2 (design and layout together: `forge gate <slug> g2 done`).
 
 ## G3: dataset
 
 - 30-60 images, at least 1024 px on the short side of the bucket.
 - Mix: ~20 % close-up, ~30 % bust and waist, ~25 % full body, ~10 % side and back, 15-25 % other outfit
   states **including nude (4-8, always local)**. Every outfit state the story needs is represented.
-- Sources: reference-sheet edits (angles, poses), txt2img with the appearance text plus img2img of the
-  master (~0.55) in varied scenes, other outfits. Nudity from the master: paint the outfit in skin tone
+- Sources: the design lock and the layout (turnaround, ornament close-ups captioned
+  `<trigger>, close-up, <part>`, the sprite bodies, the expression heads), edits of the master in varied
+  scenes, other outfits. Not txt2img from the appearance text alone: the LoRA then learns an average of
+  the ornaments. Nudity from the master: paint the outfit in skin tone
   and img2img at 0.75, or inpaint the body (mask the outfit, denoise 1.0, `completely nude`).
 - With a cloud SFW backend, do two rounds: (1) SFW from the cloud, train LoRA v1 (+ a project style LoRA
   on all approved cloud images so local renders look like them); (2) nudity locally with LoRA v1 + style
@@ -161,7 +207,7 @@ Illustrious, RTX 4090):
 | network | `networks.lora`, dim 32, alpha 16 |
 | learning rate | UNet 1.5e-4, text encoder 3e-5 |
 | optimizer, scheduler | AdamW8bit, cosine, warmup 40, `min_snr_gamma 5` |
-| data | 1024 with buckets 640-1536, repeats 8, batch 4, `keep_tokens 1` |
+| data | 1024 with buckets 640-1536, repeats 6-8 (~1000 steps), batch 4, `keep_tokens 2` (trigger, outfit) |
 | length | 12 epochs, save every 2 |
 | speed | bf16, sdpa, gradient checkpointing, latent cache; ~22 min, ~15 GB |
 
@@ -170,7 +216,8 @@ the identity and `<name>_<outfit>` for the canonical outfit.
 
 **Gate:** a pick batch, one group per test prompt, one candidate per saved epoch, same seeds:
 (1) trigger + outfit, white background; (2) trigger + outfit in a scene; (3) trigger + **another**
-outfit in daylight; (4) trigger + nude; (5) a couple (`1boy, faceless male`). The chosen epoch shows
+outfit in daylight; (4) trigger + nude; (5) a couple (`1boy, faceless male`); (6) an ornament close-up (`<trigger>, close-up,
+<signature accessory>`). The chosen epoch shows
 the anchors in all five, keeps the canonical outfit out of prompt 3, and is not overcooked. Then add the
 LoRA to the profile:
 
@@ -181,62 +228,46 @@ forge profile <slug> --sfw-opt 'loras=[{"name":"<name>_v1.safetensors","weight":
 
 ## G5: sprites
 
-**Mapping.** SillyTavern classifies each reply into 28 labels (go_emotions); a missing label falls
-back to `neutral`. The 28 are grouped into 6 body poses; each label is drawn once per outfit set, on
-the pose that matches its body language (28 sprites per set, not 6 x 28):
+Built in layers from the G2.5 layout. Outfit sets for SillyTavern: the canonical outfit in
+`characters/<Name>/`, others in subfolders (`nude/`, `robe/`).
 
-| Pose | Body | Labels |
-|---|---|---|
-| P1 confident | hand on hip, chin up | pride, approval, optimism, amusement |
-| P2 closed | arms crossed | annoyance, disapproval, anger, disgust, disappointment |
-| P3 shaken | hand on cheek, other on chest | embarrassment, nervousness, surprise, realization, fear |
-| P4 seductive | finger at lips, head tilted | desire, love, curiosity, admiration |
-| P5 open | arms open | joy, excitement, gratitude, relief |
-| P6 withdrawn | hands together, eyes down | sadness, grief, remorse, caring, confusion, neutral |
-
-Outfit sets: the canonical outfit in `characters/<Name>/`, others in subfolders (`nude/`, `robe/`).
-Two sets = 56 sprites; a third set adds 28.
-
-**Steps:**
-
-1. **Full-body master per pose**: 768 x 1344 base, hires to 1152 x 2016, head to feet with margin top
-   (horns, accessories) and bottom (feet). Pose from an OpenPose skeleton (ControlNet) or txt2img with
-   the pose tags, 6 seeds per pose, pick one (pick batch). Outpaint the top if cut.
-2. **Base nude body per pose** with the LoRA, then **each outfit by inpaint** on it (mask torso and legs,
-   denoise 1.0, the outfit token). Shortcut used for Rin: img2img the dressed base at 0.55, then paint
-   the outfit in skin tone and img2img at 0.75.
-3. **Hands at the face's resolution**: re-render each hand crop of the base at 1024 px with the LoRA,
-   denoise ~0.38, 3 seeds, a nails prompt; pick at >= 400 px per hand. A hard hand pose (fingers lying
-   flat, overlapping) needs denoise 0.55-0.65, a shape prompt ("palm down, four fingers together, one
-   thumb"), 8 seeds, and the **whole render square** pasted back (a feathered ellipse leaves a ghost of
-   the old finger).
-4. **Expressions** by a face-only pass (denoise 0.55; 0.58 for eyes-down poses), one per label.
-5. **Hands near the face come from the base**: the face pass redraws anything near the face and creates
-   ghost fingers. Paste the approved base hand (polygon) over every expression, and restore everything
-   below the chin from the base (necklaces change colour between expressions otherwise).
-6. **Finish at 2x** (`forge finish`): GPT in tiles for SFW, GPU local in tiles for NSFW (the owner chose
-   the method per character; see [RENDERING.md](RENDERING.md#finishing-2x-in-tiles)). A full-body master
-   at 1152 x 2016 has a face box ~230 px wide (~175 px at GPT's 1024 x 1536), and the display crop needs
-   265 px: without this step the crop is enlarged and soft. **Finish the base of each pose once**, then for each expression finish only the
-   head and paste it on the finished base, restoring everything below the chin from it as in step 5: a
-   whole-image redraw per expression would let hands and jewellery drift between expressions. Compare
-   with the unfinished picture (key C) at 3x before going on: eyes, fingers, outline, skin colour.
-7. **Cutout** of the finished picture: render on flat white and run `tools/cutout2.py` (pockets, halo,
-   edge colour), or use a backend with native transparency. Check on dark and magenta backgrounds.
-8. **Display crop and normalisation**: for SillyTavern, crop the finished master to 832 x 1367 with face
-   width F = 265 px and face top T = 316 px, figure running off the bottom edge (same scale and position
-   for every sprite, or they jump). The crop must shrink the master, never enlarge it. Keep the masters.
-9. **Automatic QA**: `tools/qa_sprites.py <folder> --face --sheet flagged.png` must PASS; look at every
-   flagged crop. Waivers (art that looks like a defect, such as a white rim light inside the line art)
-   go into a waivers file with a reason and date.
+1. **Bodies, derived from the master**, on the canvas template, wings folded: SFW by GPT edit with the
+   master attached ("same character, same outfit, change only the pose to ..."); locally by an OpenPose
+   skeleton drawn on the template + the LoRA, then img2img/inpaint at the master's scale. A few
+   candidates per body, one pick batch.
+2. **Hands, once per body**: masked inpaint of the hand (polygon dilated 10-12 px), 2x context crop,
+   ControlNet depth or canny from the approved hand at ~0.5, denoise ~0.45, 3-8 seeds, a nails prompt from
+   the style bible; pick at >= 400 px per hand. Never paste a square that contains jewellery.
+3. **Finish each body at 2x once** (`forge finish`): GPT in tiles for SFW, GPU local in tiles for NSFW.
+   Compare with the unfinished body (key C) at 3x: eyes, fingers, outline, skin colour.
+4. **Cut out each body once**: GPT renders with native transparency; local renders on mid-grey and
+   `tools/cutout2.py`. Check on dark and magenta backgrounds; QA's rim check must pass.
+5. **Expressions on the finished body**: draw two masks once per body (eyes + brows with a few px of lid
+   shadow; mouth with the chin crease; blush optional). Each expression is an edit inside those masks
+   only: GPT masked edit for SFW ("edit only the eyes, eyebrows and mouth to show ...; everything else is
+   locked", the irises keep the style bible colour), or a local masked inpaint (InpaintModelConditioning +
+   DifferentialDiffusion, denoise 0.6-0.75, `dpmpp_2m` + `karras`, 24 steps, a 2x face context crop).
+   QA: the largest difference outside the masks is 0.
+6. **Other outfits below the chin**: on the finished dressed body, inpaint locally inside the outfit mask
+   (denoise 1.0, DifferentialDiffusion at the edge); the head, horns, wings and the expression layers are
+   the same pixels in every set, so the head GPT finished on the SFW body is reused without any NSFW image
+   leaving the GPU. Check the neck seam at 3x.
+7. **Composite** body x expression x outfit into flat images; keep the layers.
+8. **Display crop** with the one global scale: for SillyTavern 832 x 1367, face width F = 265 px, face top
+   T = 316 px, anchored on the neck, figure running off the bottom edge. The crop must shrink the
+   finished body, never enlarge it.
+9. **Automatic QA**: `tools/qa_sprites.py <folder> --face --sheet flagged.png` must PASS (halo, rim,
+   pockets); look at every flagged crop. Waivers go into a waivers file with a reason, a date and a
+   zoomed crop.
 10. **Your zoomed review**: `tools/qa_zoom.py` sheets, each hand >= 400 px tall on screen. Count fingers.
-11. **Submit** one review batch per set or per pose, with regions: every hand, eyes, face, feet (full
-    body), horns, wings and tail when visible, plus edge spots the automatic QA flagged. Same region
-    label for the same body part across expressions (the studio keeps the loupe on it while the owner
-    flips images, which is how inconsistent hands get caught).
+11. **Submit** one review batch per body or set, with regions: every hand, eyes, face, feet, horns, wings,
+    tail and the signature ornaments (circlet, choker gem). Same region label for the same part across
+    sprites, so the studio keeps the loupe on it while the owner flips images.
 
-Common fixes: wrong hand in the base: re-render the hand; wrong hand in one expression: paste the base
-hand; pocket, halo or ghost strand: redo the cutout; face detail: repeat the face pass with another seed.
+Tooling status (November 2026): `forge render` does txt2img and img2img, `forge finish` the 2x step.
+Masked inpaint, OpenPose and depth ControlNet run through a ComfyUI workflow file (`workflow` option with
+`%init%`; ComfyUI 0.46 has the nodes built in, only the model files are needed) or a script in the
+character's folder, until Charforge wraps them.
 
 ## G6: backgrounds and CGs
 
@@ -291,3 +322,11 @@ that: backups of every installed asset, scripts and workflows in the repository,
 9. Segmenters fail on trapped background and edges; with a known flat background, both can be solved
    exactly. Native transparency is better still.
 10. Couples in POV.
+11. (V2 review) Six poses rendered from six seeds were six versions of the character: horns, circlet,
+    pendant, earrings, sleeves and body scale all drifted. Derive from one master and build in layers.
+12. Normalising each pose by its own detected face width made the body jump up to 27 % between poses:
+    use one scale for the character.
+13. Rendering the nude set again changed the head: inpaint below the chin instead.
+14. Ornaments asked in the same prompt as the eye colour picked it up (Rin's ruby came out green): keep
+    colours next to their objects and repeat one accent colour.
+15. All seven of the owner's rejections in V1 were hands: choose poses that keep hands readable or hidden.

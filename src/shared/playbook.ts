@@ -27,13 +27,13 @@ export const PLAYBOOK: Record<string, GatePlay> = {
   },
   g2: {
     images: true,
-    start: 'Discovery round 1: from the brief, write 8-12 genuinely different concepts (silhouette, outfit, palette, mood), full body on a plain background, SFW backend. forge render --char <slug> --rating sfw --prompt "..." --submit --phase g2 --title "Conceitos, rodada 1" (one call per concept, or a manifest). Then refine from what the owner liked (like.* reasons) until the owner picks one design; then the turnaround sheet and the 20 blind anchor generations on the local model.',
+    start: 'Discovery round 1: from the brief, write 8-12 genuinely different concepts (silhouette, outfit, palette, mood), full body on a plain background, SFW backend. forge render --char <slug> --rating sfw --prompt "..." --submit --phase g2 --title "Conceitos, rodada 1" (one call per concept, or a manifest). Then refine from what the owner liked (like.* reasons) until the owner picks one master; then the design lock (finish the master 2x, turnaround, ornament detail sheet, style bible), the anchors test on the local model, and the layout (canvas scale, bodies, expression sheet: PLAYBOOK G2.5) before the owner signs off G2.',
     ownerWhileStart: 'Esperar as primeiras opções de conceito.',
     doc: 'docs/PLAYBOOK.md#g2-design-discovery-and-anchors',
   },
   g3: {
     images: true,
-    start: 'Build the LoRA dataset from the approved design: 40-60 images covering close-ups, waist-up, full body, side and back, and every outfit state (NSFW ones on the local backend). Submit it in batches by outfit state with a face and hand region on each.',
+    start: 'Build the LoRA dataset from the design lock and the layout, never from txt2img of the appearance text: 45-60 images covering ornament close-ups, waist-up, full body, side and back, the sprite bodies and expression heads, and every outfit state (NSFW ones on the local backend). Submit it in batches by outfit state with a face and hand region on each.',
     ownerWhileStart: 'Esperar o dataset.',
     doc: 'docs/PLAYBOOK.md#g3-dataset',
   },
@@ -45,7 +45,7 @@ export const PLAYBOOK: Record<string, GatePlay> = {
   },
   g5: {
     images: true,
-    start: 'Sprites: one full-body master per pose (head to feet, margin top and bottom), expressions by face pass, hands from the approved base, cutout, then the display crop. Run qa_sprites first; submit with regions on every hand, the eyes, the face and the feet, and `previous` on re-renders.',
+    start: 'Sprites in layers (PLAYBOOK G5): bodies derived from the master on the canvas template, hands fixed once per body, each body finished 2x once and cut out once; expressions as masked edits of eyes, brows and mouth on the finished body; other outfits inpainted below the chin; composite, then crop at the one global scale. Run qa_sprites first; submit with regions on every hand, the eyes, the face, the feet and the signature ornaments, and `previous` on re-renders.',
     ownerWhileStart: 'Esperar as sprites.',
     doc: 'docs/PLAYBOOK.md#g5-sprites',
   },
