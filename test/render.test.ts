@@ -127,4 +127,17 @@ describe('next step', () => {
     db.setBatchStatus(b2, 'submitted');
     expect(nextStep(db.getCharacter('lyra')!, [])).toMatchObject({ gate: 'g2', state: 'signoff' });
   });
+
+  it('once a gate is signed off, the rejections in it are settled, not fixes', () => {
+    const db = character();
+    db.setGate('lyra', 'g1', { status: 'done', at: '', by: 'agent' });
+    const ch = db.getCharacter('lyra')!;
+    const b = db.createBatch({ characterId: ch.id, phase: 'g2', kind: 'review', title: 'Candidatas', notes: '', parentId: null });
+    const lost = db.addItem({ batchId: b, position: 0, label: 'a', group: '', file: 'f', thumb: 't', prevFile: null, width: 10, height: 10, hasAlpha: false, source: null, meta: {}, regions: [], checks: [] });
+    db.saveReview(lost, { verdict: 'reject', reasons: [], regions: {}, pins: [], note: 'não gostei da tiara', updatedAt: null });
+    db.setBatchStatus(b, 'submitted');
+    expect(nextStep(db.getCharacter('lyra')!, [])).toMatchObject({ state: 'fix', batchId: b });
+    db.setGate('lyra', 'g2', { status: 'done', at: '', by: 'agent' });
+    expect(nextStep(db.getCharacter('lyra')!, [])).toMatchObject({ gate: 'g3', state: 'start' });
+  });
 });

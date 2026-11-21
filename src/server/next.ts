@@ -13,10 +13,12 @@ const gateLabel = (id: string) => {
 };
 
 /** Submitted batches nobody followed up with a newer round (parentId) that still have rejections. */
-function needsFix(batches: Batch[]): Batch | undefined {
+function needsFix(batches: Batch[], gates: CharacterDetail['gates']): Batch | undefined {
   const parents = new Set(batches.map((b) => b.parentId).filter(Boolean));
   return batches
     .filter((b) => b.status === 'submitted' && !parents.has(b.id) && b.counts.rejected > 0)
+    // once the owner signed a gate off, what was rejected in it is settled (design alternatives, a baseline test)
+    .filter((b) => gates[b.phase]?.status !== 'done')
     // a pick batch with a pick and the rest rejected is a normal, finished pick
     .filter((b) => !(b.kind === 'pick' && b.counts.approved > 0))
     .sort((a, b) => a.id - b.id)[0];
@@ -61,7 +63,7 @@ export function nextStep(ch: CharacterDetail, jobs: Job[]): NextStep {
     };
   }
 
-  const fix = needsFix(ch.batches);
+  const fix = needsFix(ch.batches, ch.gates);
   if (fix) {
     return {
       gate: fix.phase, state: 'fix', batchId: fix.id, owner: null,
