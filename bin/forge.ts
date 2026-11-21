@@ -9,7 +9,8 @@
 //   forge char cover <slug> <itemId>
 //   forge profile <slug> [--preset <id>] [--sfw <backend>] [--nsfw <backend|none>] [--sfw-opt k=v]... [--nsfw-opt k=v]...
 //   forge render --char <slug> --rating sfw|nsfw --prompt <text|@file> [--negative ...] [--n 4] [--size 768x1344]
-//                [--seed N] [--init img] [--denoise 0.5] [--ref img]... [--transparent] [--opt k=v]... [--out dir]
+//                [--seed N] [--init img [--mask mask.png]] [--denoise 0.5] [--ref img]... [--transparent] [--opt k=v]... [--out dir]
+//                (--mask: inpaint on comfyui, white = redraw; outside the mask the picture is kept exactly)
 //                [--submit --phase g2 --title "..." [--group ...] [--kind review|pick]]
 //   forge finish --char <slug> --item <id> [--backend codex|comfyui] [--rating sfw|nsfw] [--face x0,y0,x1,y1]
 //   forge finish --char <slug> --init <img> --rating sfw|nsfw [--backend ...] [--prompt ...] [--out dir]
@@ -138,7 +139,7 @@ async function renderCmd(argv: string[]) {
     args: argv,
     options: {
       char: { type: 'string' }, rating: { type: 'string' }, prompt: { type: 'string' }, negative: { type: 'string' }, n: { type: 'string' },
-      size: { type: 'string' }, seed: { type: 'string' }, init: { type: 'string' }, denoise: { type: 'string' }, ref: { type: 'string', multiple: true },
+      size: { type: 'string' }, seed: { type: 'string' }, init: { type: 'string' }, mask: { type: 'string' }, denoise: { type: 'string' }, ref: { type: 'string', multiple: true },
       transparent: { type: 'boolean' }, opt: { type: 'string', multiple: true }, out: { type: 'string' }, backend: { type: 'string' },
       submit: { type: 'boolean' }, phase: { type: 'string' }, title: { type: 'string' }, group: { type: 'string' }, kind: { type: 'string' }, notes: { type: 'string' },
     },
@@ -159,7 +160,7 @@ async function renderCmd(argv: string[]) {
   const req: RenderRequest = {
     prompt: await text(values.prompt), negative: values.negative, rating,
     width: w || undefined, height: h || undefined, count: Number(values.n ?? 1), seed: values.seed ? Number(values.seed) : undefined,
-    init: values.init ? resolve(values.init) : undefined, denoise: values.denoise ? Number(values.denoise) : undefined,
+    init: values.init ? resolve(values.init) : undefined, mask: values.mask ? resolve(values.mask) : undefined, denoise: values.denoise ? Number(values.denoise) : undefined,
     references: values.ref?.map((r) => resolve(r)), transparent: values.transparent, options: kv(values.opt),
   };
   const out = resolve(values.out ?? join('renders', `${Date.now()}`));

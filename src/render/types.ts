@@ -31,6 +31,9 @@ export interface RenderRequest {
   init?: string;
   /** `init` is the picture to change (the GPT image tool's input image), not a loose reference */
   edit?: boolean;
+  /** inpaint: a mask the size of `init`, white where to redraw (soft edges allowed); outside it the result
+   *  keeps `init`'s pixels exactly. Local backends only (comfyui). */
+  mask?: string;
   /** finish `init` instead of rendering: enlarge it by redrawing it in tiles (src/render/finish.ts) */
   finish?: FinishSpec;
   /** img2img strength for diffusion backends (0..1) */

@@ -28,6 +28,7 @@ export async function localInputs(req: RenderRequest, source: string, dir: strin
   return {
     ...req,
     init: req.init ? await one(req.init, source, dir, i++) : undefined,
+    mask: req.mask ? await one(req.mask, source, dir, i++) : undefined,
     references: req.references ? await Promise.all(req.references.map((r) => one(r, source, dir, i++))) : undefined,
   };
 }

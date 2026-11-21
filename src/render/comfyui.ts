@@ -58,7 +58,7 @@ async function upload(base: string, file: string): Promise<string> {
 }
 
 /** The default text-to-image (or image-to-image) graph, in ComfyUI's API format. */
-export function buildGraph(o: Opts, req: RenderRequest, seed: number, initName?: string) {
+export function buildGraph(o: Opts, req: RenderRequest, seed: number, initName?: string, maskName?: string) {
   const g: Record<string, { class_type: string; inputs: Record<string, unknown> }> = {};
   let id = 0;
   const add = (class_type: string, inputs: Record<string, unknown>) => {
@@ -78,15 +78,27 @@ export function buildGraph(o: Opts, req: RenderRequest, seed: number, initName?:
   const neg = add('CLIPTextEncode', { clip: [skip, 0], text: [o.negativeBase, req.negative].filter(Boolean).join(', ') });
   const vae: [string, number] = [ckpt, 2];
   let latent: [string, number];
-  if (initName) {
+  let positive: [string, number] = [pos, 0];
+  let negative: [string, number] = [neg, 0];
+  if (initName && maskName) {
+    // inpaint: the mask's soft edge becomes a per-pixel denoise (DifferentialDiffusion)
+    const img = add('LoadImage', { image: initName });
+    const mask = add('LoadImageMask', { image: maskName, channel: 'red' });
+    const cond = add('InpaintModelConditioning', { positive, negative, vae, pixels: [img, 0], mask: [mask, 0], noise_mask: true });
+    positive = [cond, 0];
+    negative = [cond, 1];
+    latent = [cond, 2];
+    model = [add('DifferentialDiffusion', { model }), 0];
+  } else if (initName) {
     const img = add('LoadImage', { image: initName });
     latent = [add('VAEEncode', { pixels: [img, 0], vae }), 0];
   } else {
     latent = [add('EmptyLatentImage', { width: req.width ?? 832, height: req.height ?? 1216, batch_size: 1 }), 0];
   }
   const sample = (lat: [string, number], steps: number, denoise: number) =>
-    add('KSampler', { model, positive: [pos, 0], negative: [neg, 0], seed, steps, cfg: o.cfg, sampler_name: o.sampler, scheduler: o.scheduler, denoise, latent_image: lat });
-  let image: [string, number] = [add('VAEDecode', { samples: [sample(latent, o.steps, initName ? req.denoise ?? 0.5 : 1), 0], vae }), 0];
+    add('KSampler', { model, positive, negative, seed, steps, cfg: o.cfg, sampler_name: o.sampler, scheduler: o.scheduler, denoise, latent_image: lat });
+  const first = maskName ? req.denoise ?? 1 : initName ? req.denoise ?? 0.5 : 1;
+  let image: [string, number] = [add('VAEDecode', { samples: [sample(latent, o.steps, first), 0], vae }), 0];
   if (o.hires && !initName) {
     const up = add('ImageScaleBy', { image, upscale_method: 'lanczos', scale_by: o.hires.scale });
     const enc = add('VAEEncode', { pixels: [up, 0], vae });
@@ -114,6 +126,17 @@ async function templateGraph(path: string, o: Opts, req: RenderRequest, seed: nu
     return v;
   };
   return walk(JSON.parse(await readFile(path, 'utf8')));
+}
+
+/**
+ * Inpaint results go through the VAE, which shifts every pixel a little: blend the result back over the
+ * original through the mask, so outside it the picture is exactly the one sent (heads, hands, ornaments).
+ */
+async function keepOutsideMask(init: string, result: Uint8Array, mask: string): Promise<Buffer> {
+  const { width, height } = await sharp(init).metadata();
+  const alpha = await sharp(mask).resize(width, height).greyscale().toColourspace('b-w').raw().toBuffer();
+  const top = await sharp(result).resize(width, height).removeAlpha().joinChannel(alpha, { raw: { width: width!, height: height!, channels: 1 } }).png().toBuffer();
+  return sharp(init).removeAlpha().composite([{ input: top }]).png().toBuffer();
 }
 
 /** Queue a graph and return the image it saved. */
@@ -230,15 +253,17 @@ export const comfyui: Backend = {
   async render(req, options, outDir, log) {
     const o = opts({ ...options, ...req.options });
     const initName = req.init ? await upload(o.url, req.init) : undefined;
+    if (req.mask && !req.init) throw new Error('a mask needs the picture it applies to (init)');
+    const maskName = req.mask ? await upload(o.url, req.mask) : undefined;
     const out: RenderOutput[] = [];
     const count = req.count ?? 1;
     const first = req.seed ?? Math.floor(Math.random() * 2 ** 31);
     for (let i = 0; i < count; i++) {
       const seed = first + i;
-      const graph = o.workflow ? await templateGraph(o.workflow, o, req, seed, initName) : buildGraph(o, req, seed, initName);
+      const graph = o.workflow ? await templateGraph(o.workflow, o, req, seed, initName) : buildGraph(o, req, seed, initName, maskName);
       const data = await runGraph(o, graph, log, `seed ${seed}`);
       const file = join(outDir, `comfyui-${seed}.png`);
-      await writeFile(file, data);
+      await writeFile(file, maskName ? await keepOutsideMask(req.init!, data, req.mask!) : data);
       // the face pass belongs to a new picture; an img2img (finishing tiles, edits) keeps its face as sent
       const fresh = !initName && !o.workflow;
       const face = fresh ? await facePass(o, req, file, seed, log) : null;
