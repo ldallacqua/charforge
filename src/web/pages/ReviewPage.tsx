@@ -8,7 +8,7 @@ import type { BatchDetail, Box, Item, Pin, Review } from '../../shared/types.ts'
 import { useBatch, useFinish, useMoreLikeThis, useReopenBatch, useSaveReview, useSubmitBatch } from '../api.ts';
 import { useKeys } from '../hooks.ts';
 import { CheckMark, CrossMark } from '../components/marks.tsx';
-import { CountsLine, Filmstrip, Kbd, Loupe, SegmentBar, phaseLabel } from '../components/parts.tsx';
+import { CountsLine, Filmstrip, Kbd, Loupe, SegmentBar, WholeLoupe, phaseLabel } from '../components/parts.tsx';
 import { ApprovalChips, ReasonPicker } from '../components/Reasons.tsx';
 import { BACKGROUNDS, FIT, Viewer, type Bg, type Compare, type Focus, type View } from '../components/Viewer.tsx';
 import { PickBoard } from './PickBoard.tsx';
@@ -293,6 +293,7 @@ function ReviewBoard({ batch }: { batch: BatchDetail }) {
 
             {item.regions.length > 0 && (
               <div className="mb-4 grid grid-cols-2 gap-2">
+                <WholeLoupe item={item} focused={focusRegion === null} bg={bg} onClick={() => focusOn(null)} />
                 {item.regions.map((g, i) => (
                   <Loupe key={g.id} item={item} region={g} index={i} mark={review.regions[g.id]} focused={focusRegion === g.id} bg={bg} onClick={() => focusOn(g.id)} />
                 ))}
@@ -641,7 +642,7 @@ export function HelpOverlay({ onClose, pick = false }: { onClose: () => void; pi
         ['Tab', 'Próxima região'],
         ['O', 'Região OK, ir para a próxima'],
         ['X', 'Região com problema'],
-        ['F  ou  Esc', 'Ver a imagem inteira'],
+        ['0, F  ou  Esc', 'Ver a imagem inteira (fica assim ao passar de imagem)'],
         ['P  ou  Shift + arrastar', 'Marcar um ponto'],
         ['C', 'Comparar com a rodada anterior'],
         ['B', 'Trocar o fundo'],

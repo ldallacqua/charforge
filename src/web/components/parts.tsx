@@ -73,6 +73,30 @@ export function Loupe(props: {
   );
 }
 
+/**
+ * The first loupe: the whole image. Like the others it stays chosen while the owner flips images, so a
+ * series can be compared whole as easily as hand by hand.
+ */
+export function WholeLoupe({ item, focused, bg, onClick }: { item: Item; focused: boolean; bg: Bg; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        'group relative aspect-[5/4] w-full overflow-hidden rounded-md text-left outline-offset-2 transition-[box-shadow]',
+        BG_TILE[bg],
+        focused ? 'ring-2 ring-amber' : 'ring-1 ring-line hover:ring-dim',
+      )}
+      aria-label="Ver a imagem inteira"
+    >
+      <img src={item.url} alt="" draggable={false} className="absolute inset-0 size-full object-contain" />
+      <span className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-gradient-to-t from-black/85 to-transparent px-2 pb-1.5 pt-5 text-xs">
+        <span className="font-narrow font-semibold text-ink">0  Imagem inteira</span>
+      </span>
+    </button>
+  );
+}
+
 /** Contact-sheet thumbnails down the left edge, grouped (pose, set...). */
 export function Filmstrip({ items, current, onSelect, horizontal = false }: { items: Item[]; current: number; onSelect: (i: number) => void; horizontal?: boolean }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
