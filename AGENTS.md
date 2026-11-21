@@ -114,6 +114,14 @@ accessory wings tail edge other`. Phases `g0`-`g8`. Check status `pass warn fail
 - **Secrets** (API keys) only in the environment of the rendering machine. Never in profiles, manifests,
   notes, commits or the UI.
 - **Never commit `data/`** (images, some NSFW, and the database) or renders.
+- **Before you submit** (every batch): make a contact sheet and look at it; zoom on every hand (>= 400 px,
+  count fingers), the eyes, the signature ornaments and, from behind, the wing roots; for local renders
+  check that `meta` shows the hires and face passes; write everything you saw into the batch notes (they
+  cannot be edited after submitting). Never send what you have not looked at.
+- **Mistakes**: fine; repeating one is not. Write each into PLAYBOOK "Lessons" with its fix in the same
+  session, and add a default or a check when one can prevent it.
+- **Scripts**: machine settings come from the repository's `.env` (gitignored, loaded by the CLI); in zsh
+  split a list with `${=var}` (an unquoted `$var` is one word) or use bash.
 - **Derive, never re-roll** (V2): every pose, outfit and expression starts from the approved master or a
   finished body; sprites are built in layers (bodies, masked expressions, outfits below the chin) at one
   scale. PLAYBOOK principles 1-5.

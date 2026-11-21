@@ -7,3 +7,4 @@ renders
 *.log
 tools/.venv
 **/__pycache__
+.env

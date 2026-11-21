@@ -25,10 +25,11 @@
 // FORGE_URL (default http://127.0.0.1:8787) points at the studio. Backend settings come from the
 // environment: COMFYUI_URL, OPENAI_API_KEY, CODEX_BIN (see docs/RENDERING.md).
 
-import { openAsBlob } from 'node:fs';
+import { existsSync, openAsBlob } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { Batch, CharacterDetail, Character, Job, Manifest, ManifestItem, NextStep } from '../src/shared/types.ts';
 import { availableBackends, render as renderWith, type BackendConfig, type RenderRequest } from '../src/render/index.ts';
@@ -36,6 +37,12 @@ import { FINISH_LABEL, finish as finishWith, finishMode, perform } from '../src/
 import { localInputs } from '../src/render/inputs.ts';
 import { PHASES } from '../src/shared/phases.ts';
 import type { VerdictExport } from '../src/server/verdicts.ts';
+
+// Machine settings (COMFYUI_URL, CODEX_BIN, CHARFORGE_PYTHON, FORGE_URL...) from the repository's .env
+// (gitignored) when it exists, so a script or a new shell does not run without them: Rin V2's first
+// local test failed for a missing COMFYUI_URL. Variables already set in the environment win.
+const ENV_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '.env');
+if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 const BASE = (process.env.FORGE_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '');
 

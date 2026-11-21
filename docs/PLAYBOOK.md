@@ -115,7 +115,9 @@ Same prompt skeleton for all, so the differences are the ideas, not noise:
 <hair>, <eyes>, <distinctive feature>, <outfit>, <palette words>, <mood/expression>
 ```
 
-Render with the **SFW backend**, full body, plain background, then submit as one review batch:
+Each variation must read as different at thumbnail size: look at the contact sheet before submitting
+(Rin V2: two of six variations, a bigger horn and a V-shaped circlet, looked like the base and got "nada
+demais"). Render with the **SFW backend**, full body, plain background, then submit as one review batch:
 
 ```bash
 forge render --char <slug> --rating sfw --prompt @concept-03.txt --size 768x1344 \
@@ -136,7 +138,15 @@ the master image. Apply the finishing chain to the master.
 **Design lock** (after the master pick), signed off as one gate:
 - **Finish the master** at 2x (`forge finish`).
 - **Reference sheet**: front, side and back full body, a face close-up. One request per view, always with
-  the master attached ("same character, side view, full body, mid-grey background").
+  the master attached ("same character, side view, full body, mid-grey background"). Views the master
+  does not show need the answers spelled out, or the model guesses wrong (Rin V2):
+  - from behind, say where front-only pieces are ("the ruby is at the front of the choker; from behind
+    only the black band shows", "nothing of the circlet shows from behind"): unsaid, both came out on the
+    nape;
+  - say where the wings attach ("both wings attach at the shoulder blades") and check the wing roots in
+    every back and three-quarter-back image: two dataset scenes had the wings growing from under an arm;
+  - in a side view, name the near and the far leg and keep the head in the body's profile: unsaid, the
+    legs swapped sides and the head twisted.
 - **Ornament detail sheet**: each piece large, one per image, the master attached: circlet front and
   side, the gem, horns from the side, tail tip, wing claw, sleeve cuff, shoes, a hand with the nails.
 - **Style bible** (one page in the character's folder): the palette sampled from the finished master
@@ -146,7 +156,9 @@ the master image. Apply the finishing chain to the master.
   highlights. Its prompt block goes first in every later request.
 
 **Anchors test, always on the local model** (NSFW and chat CGs come from the local GPU): 20 images from
-the appearance text only, no LoRA, no reference, 5 scenes x 4 seeds, plus 4 ornament close-ups. Submit
+the style bible's local tag block (with the body-shape tags and negatives earlier characters taught: Rin
+V2's first try left out V1's `medium breasts, slim waist` / `huge breasts, wide hips, thick thighs, curvy`
+and the model drew her far curvier than the master) and the appearance text only, no LoRA, no reference, 5 scenes x 4 seeds, plus 4 ornament close-ups. Submit
 as a review batch with face, hair and ornament regions. **Passes** when each anchor appears in at least
 70 % of the 20; otherwise simplify the anchor (bigger, higher contrast) and repeat.
 With a cloud SFW backend, expect the local images to differ a lot from the cloud design (skin tone,
@@ -313,7 +325,34 @@ that: backups of every installed asset, scripts and workflows in the repository,
 
 ---
 
-## Lessons from the first character
+## Lessons
+
+Every mistake goes here, with its fix, in the session it happened (the owner's rule: mistakes are fine,
+repeating one is not). Where a check or a default can prevent it, add that too and say so.
+
+### From Rin V2 (November 2026)
+
+1. **Local images judged without the face pass.** The LoRA test grid had hires but no face pass; at full
+   body the face is ~200 px and every full-body image was rejected for soft eyes, ears and mouth.
+   *Fixed in code:* `forge render` on ComfyUI runs an automatic face pass (RENDERING.md). Judge a LoRA
+   only on images that had the whole finishing chain (principle 6).
+2. **Body tags from V1 forgotten** in the first local anchors test (G2 anchors test). *Fixed:* they live
+   in the style bible's local tag block, which every local prompt starts from.
+3. **The local anchors test shown without saying what it measures**: the owner found it "very different"
+   from GPT and did not know whether to approve. *Fixed:* the G2 note above; say it in the batch notes.
+4. **Back and side views drawn wrong** (ornaments on the nape, wings from the arm, swapped legs). *Fixed:*
+   the reference-sheet rules in G2 design lock.
+5. **Variations too subtle to tell apart.** *Fixed:* the thumbnail check in G2 round 1.
+6. **A batch submitted before the zoomed review** (design round 1). *Fixed:* AGENTS.md "Before you
+   submit"; batch notes cannot be edited afterwards, so findings go in before submitting.
+7. **A script ran without `COMFYUI_URL`** and every local render failed. *Fixed in code:* the CLI loads the
+   repository's gitignored `.env`.
+8. **`forge next` asked to fix design alternatives** the owner had not picked, after G2 was signed off.
+   *Fixed in code:* rejections inside a signed-off gate are settled.
+9. **A zsh loop over `$ids` ran once** with every id as one word (zsh does not split unquoted variables).
+   *Fixed:* use `${=ids}` or bash; AGENTS.md.
+
+### From the first character (Rin V1)
 
 1. LoRA before sprites; test the anchors before anything else.
 2. Put nudity and every outfit state in the dataset, or later sets need tricks.
