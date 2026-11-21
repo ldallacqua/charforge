@@ -58,19 +58,22 @@ def flat(rgba, back):
     return canvas.convert('RGB')
 
 
-def detect_face(rgba):
-    """Largest anime face in the upper 60% of the picture, as [x, y, w, h], or None.
+def detect_face(rgba, min_weight=0.0):
+    """The most confident anime face in the upper 60% of the picture, as [x, y, w, h], or None.
 
     The cascade misses faces behind a hand or on some backgrounds, so a cut-out is tried on several
-    backgrounds, with and without histogram equalisation, before giving up."""
+    backgrounds, with and without histogram equalisation, before giving up. Among the candidates the most
+    confident wins, not the largest: in a ballroom render the largest was a chandelier (confidence 1.3)
+    and the real face (2.7) lost. `min_weight` drops weak candidates (real faces measured 2.5-4.3)."""
     cascade = cv2.CascadeClassifier(os.path.join(HERE, 'lbpcascade_animeface.xml'))
     smallest = max(24, rgba.width // 24)
     for back in [(128, 128, 128), (255, 255, 255), DARK]:
         gray = cv2.cvtColor(np.asarray(flat(rgba, back)), cv2.COLOR_RGB2GRAY)
         for picture in (cv2.equalizeHist(gray), gray):
-            found = [f for f in cascade.detectMultiScale(picture, 1.05, 4, minSize=(smallest, smallest)) if f[1] + f[3] / 2 < rgba.height * 0.6]
-            if len(found):
-                x, y, w, h = max(found, key=lambda f: f[2] * f[3])
+            boxes, _, weights = cascade.detectMultiScale3(picture, 1.05, 4, minSize=(smallest, smallest), outputRejectLevels=True)
+            found = [(float(w), b) for b, w in zip(boxes, np.ravel(weights)) if b[1] + b[3] / 2 < rgba.height * 0.6 and float(w) >= min_weight]
+            if found:
+                x, y, w, h = max(found, key=lambda f: f[0])[1]
                 return [int(x), int(y), int(w), int(h)]
     return None
 
@@ -347,13 +350,14 @@ def main():
     c.add_argument('--face-denoise', type=float, default=0.2, help='sd: denoise of the face tile (higher changes the eyes)')
     f = sub.add_parser('face', help='print the largest anime face as {"face": [x, y, w, h]} (or null)')
     f.add_argument('picture')
+    f.add_argument('--min-weight', type=float, default=1.8, help='least detector confidence (real faces measured 2.5-4.3)')
     j = sub.add_parser('join')
     j.add_argument('picture')
     j.add_argument('work')
     j.add_argument('out')
     args = p.parse_args()
     if args.command == 'face':
-        print(json.dumps({'face': detect_face(load(args.picture)[0])}))
+        print(json.dumps({'face': detect_face(load(args.picture)[0], args.min_weight)}))
     else:
         cut(args) if args.command == 'cut' else join(args)
 

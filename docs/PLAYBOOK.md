@@ -354,6 +354,13 @@ repeating one is not). Where a check or a default can prevent it, add that too a
 10. **The face pass left its crop next to the picture** (`comfyui-<seed>.png.face.png`), and a contact sheet
     globbing `comfyui-*.png` showed the crops instead of the pictures. *Fixed in code:* the crop lives in a
     temporary folder and is deleted. Contact sheets read the file named in `render.json`, never a glob.
+11. **The face pass redrew a chandelier.** The detector found the real face (confidence 2.7) and a false one
+    in the chandeliers (1.3), and the code took the larger box. *Fixed in code:* the most confident face
+    wins, and the face pass needs a confidence of 1.8 (real faces measured 2.5-4.3).
+12. **The LoRA epochs were judged on hands no pass fixes.** Every nude, POV and parity image was rejected
+    for hands, equally in every epoch: that is the missing hand pass, not the LoRA. Pick the epoch on
+    identity (face, ornaments, outfit, other outfits) and fix hands with the hand pass (G5 step 2) before
+    showing hands to the owner.
 
 ### From the first character (Rin V1)
 
