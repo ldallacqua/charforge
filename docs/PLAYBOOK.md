@@ -149,6 +149,11 @@ the master image. Apply the finishing chain to the master.
 the appearance text only, no LoRA, no reference, 5 scenes x 4 seeds, plus 4 ornament close-ups. Submit
 as a review batch with face, hair and ornament regions. **Passes** when each anchor appears in at least
 70 % of the 20; otherwise simplify the anchor (bigger, higher contrast) and repeat.
+With a cloud SFW backend, expect the local images to differ a lot from the cloud design (skin tone,
+ornaments, outfit details, rendering): text alone cannot carry a design drawn by another model. The test
+is not art to approve; it measures what the base model gets on its own, and that gap is what the LoRA
+closes (G4 tests parity), while the sprites share the cloud pixels by construction (G5 steps 5-6). Tell
+the owner so in the batch notes. Rin V2: the owner found the local images "very different" from GPT's.
 
 ## G2.5: layout (bodies, expressions, canvas)
 
@@ -217,7 +222,10 @@ the identity and `<name>_<outfit>` for the canonical outfit.
 **Gate:** a pick batch, one group per test prompt, one candidate per saved epoch, same seeds:
 (1) trigger + outfit, white background; (2) trigger + outfit in a scene; (3) trigger + **another**
 outfit in daylight; (4) trigger + nude; (5) a couple (`1boy, faceless male`); (6) an ornament close-up (`<trigger>, close-up,
-<signature accessory>`). The chosen epoch shows
+<signature accessory>`). With a cloud SFW backend add (7) **parity**: the master's
+pose and framing on mid-grey, rendered locally with the LoRA, shown next to the approved cloud master in
+the same group; the owner judges skin tone, ornaments, outfit and rendering against it. If the local look
+still differs, train a style LoRA on the approved cloud images (G3) before going on. The chosen epoch shows
 the anchors in all five, keeps the canonical outfit out of prompt 3, and is not overcooked. Then add the
 LoRA to the profile:
 
