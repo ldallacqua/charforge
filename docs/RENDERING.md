@@ -75,8 +75,8 @@ The images arrive as a new batch.
 | Backend | Native size | Transparency |
 |---|---|---|
 | comfyui (SDXL) | ~1 MP base (832 x 1216, 768 x 1344, 1152 x 896), hires 1.5x built in | none: render on flat white and run `tools/cutout2.py` (LayerDiffuse for SDXL and Qwen-Image 2.1 are native options not wired in yet) |
-| openai | 1024 x 1024, 1024 x 1536, 1536 x 1024 (larger on newer models) | `--transparent` |
-| codex | ~1024 x 1536 (plan limit), ~60-100 s per image | `--transparent` |
+| openai | `gpt-image-2.5-sunburst` by default (`gpt-image-1` was shut down on 2026-10-23): the request's exact shape, divisible by 16, from 1024 x 1536 worth of pixels up to 2560 x 1440 worth (above that the API calls it experimental); other models get 1024 x 1024, 1024 x 1536 or 1536 x 1024 | `--transparent` |
+| codex | ~1024 x 1536 (plan limit), ~60-100 s per image; references are attached to the run (`--image`), not only named | `--transparent` |
 
 Full-body sprite masters: 768 x 1344 base with hires to 1152 x 2016 on comfyui, 1024 x 1536 on the cloud
 backends. Neither is enough to crop from. The SillyTavern sprite has the face at F = 265 px (the anime face
@@ -96,23 +96,32 @@ owner compared and approved. The join holds for four reasons:
 - every redraw is lined up with the part it redraws (OpenCV ECC, affine);
 - each tile keeps its fine detail and takes its overall colour from the approved picture, so tiles agree
   and skin and hair keep the approved colours;
-- on a cut-out the outline is the redraw's, trusted only near the approved outline.
+- on a cut-out the outline is the redraw's, trusted only near the approved outline: it may move inwards by
+  2 px at most, and the join reports `edge_loss` (outline pixels that were solid and came out see-through,
+  ~0 when right; a finish above 2 % logs a warning).
 
 | Backend | Method | Tiles | Time (Rin, measured) |
 |---|---|---|---|
-| codex, openai | **GPT in tiles**: each tile is sent enlarged and soft, and GPT redraws it sharp with nothing moved, transparent background on a cut-out. The owner's choice for SFW. | fewest that keep ≥ 0.8 redraw px per output px, plus the face tile (4 for an 832 x 1367 sprite, 9 for a 1152 x 2016 master) | ~2-5 min, 3 tiles at a time |
-| comfyui | **GPU local in tiles**: SDXL img2img with the character's checkpoint and LoRA, tiles of ~1 MP at exactly 2x, denoise 0.25, face tile at 1024 px or more with denoise 0.2. The only route for NSFW. | 7 for a sprite, 16 for a master | 40-70 s |
+| codex, openai | **GPT in tiles**: each tile is sent enlarged and soft, and GPT redraws it sharp with nothing moved, transparent background on a cut-out. The owner's choice for SFW. | fewest that keep ≥ 0.8 redraw px per output px, plus the face tile (4 for an 832 x 1367 sprite: three bands and the face; 9 for a 1152 x 2016 master) | ~2-5 min, 3 tiles at a time |
+| comfyui | **GPU local in tiles**: SDXL img2img with the character's checkpoint and LoRA, tiles of ~1 MP at exactly 2x, denoise 0.25, face tile at 1024 px or more with denoise 0.2, sampler `dpmpp_2m` + `karras` (not an ancestral one, which adds fresh noise at every step). The only route for NSFW. | 7 for a sprite, 16 for a master | 40-70 s |
 | mock | tiles come back unchanged (tests the cut and join) | | |
 
 - **The rating decides the route.** An image whose rating the studio does not know counts as NSFW when the
   character has NSFW, so it is finished locally. `--backend` asks for another method (to compare), and a
   cloud backend is still refused for NSFW.
-- **Denoise is the eyes' enemy.** On Rin's sprite, a face tile at 0.4 redrew her surprised eyes
+- **Denoise is the eyes' enemy.** (These tests ran with the ancestral sampler that the tiles no longer use.) On Rin's sprite, a face tile at 0.4 redrew her surprised eyes
   half-closed; on a full-body master, where the face is small and SDXL has more to invent, 0.3 opened her
   smiling eyes and added a mole, and 0.2 came close (this is what "local models destroy the eyes" means).
   The face tile defaults to 0.2; put the expression in the prompt (`surprised, wide-eyed`) and never a
   negative that fights it. A finish from a studio item reuses the item's prompt. GPT in tiles kept the eyes
   in every test.
+- **What GPT is sent.** Each tile is cut at the exact shape of the redraw it asks for (1024 x 1536, 1536 x
+  1024 or 1024 x 1024), so nothing is stretched on the way (a stretched face comes back "corrected"). A
+  cut-out is sent on the backdrop farthest from the colours along the figure's outline, of mid-grey, light
+  grey and dark (Rin gets light grey), and the tile prompt names it: on a backdrop close to a part's colour,
+  GPT's transparency eats into that part (on the old dark backdrop, a third of the edge of Rin's black
+  horns, wings and dress came out see-through). The prompt also locks the eyes (eyelid height, iris,
+  pupils, highlights), the mouth, and bans new strands, jewellery, moles, blush and rims.
 - **A redraw that does not line up is never placed.** The join leaves it out and the tile is drawn again (two
   more rounds, then the job fails). Codex images are read from the run's own session folder
   (`~/.codex/generated_images/<session>/`, found by the run's working directory): in a parallel run the

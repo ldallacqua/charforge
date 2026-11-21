@@ -81,11 +81,11 @@ describe('backends', () => {
       delete process.env.OPENAI_API_KEY;
     });
 
-    it('maps aspect ratio to a size and asks for transparency', async () => {
+    it('keeps the requested shape at full resolution and asks for transparency', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'cf-'));
       const out = await render({ backend: 'openai' }, { prompt: 'a witch', rating: 'sfw', width: 768, height: 1344, transparent: true }, dir);
       expect(seen.url).toBe('/v1/images/generations');
-      expect(seen.body).toMatchObject({ size: '1024x1536', background: 'transparent', n: 1 });
+      expect(seen.body).toMatchObject({ model: 'gpt-image-2.5-sunburst', size: '944x1648', background: 'transparent', n: 1 });
       expect(out[0]).toMatchObject({ width: 8, height: 12, backend: 'openai' });
     });
   });

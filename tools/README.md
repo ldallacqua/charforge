@@ -7,7 +7,7 @@ that venv by itself). OpenCV stays below 5: 5.x dropped `CascadeClassifier`, the
 
 | Tool | Gate | What it does |
 |---|---|---|
-| `qa_sprites.py <folder> [--face] [--face-box x0,y0,x1,y1] [--sheet out.png] [--accept waivers.json]` | G5 | automatic sprite checks: all 28 expression labels, same canvas, real alpha, nothing cut at the top, halo below 2 %, background pockets; `--sheet` writes zoomed crops of every flagged spot |
+| `qa_sprites.py <folder> [--face] [--face-box x0,y0,x1,y1] [--sheet out.png] [--accept waivers.json]` | G5 | automatic sprite checks: all 28 expression labels, same canvas, real alpha, nothing cut at the top, halo below 2 %, light rim on the outline (opaque pixels much lighter than the figure inside: warn above 0.5 %, fail above 1.5 %), background pockets; `--sheet` writes zoomed crops of every flagged spot |
 | `qa_zoom.py <folder> <boxes.json> <out_dir>` | G5 | zoom sheets per pose: one row per expression, one column per region (face, each hand), on dark with a magenta strip |
 | `tiles.py cut <picture> <work> --mode gpt\|sd [--scale 2] [--face x,y,w,h]` and `tiles.py join <picture> <work> <out.png>` | G5 | the 2x finishing step's cut (overlapping tiles plus a face tile, sized for GPT or SDXL) and seamless join (ECC alignment, colour tied to the picture, outline kept near the approved one, redraws that do not line up left out). Called by `forge finish`; see docs/RENDERING.md |
 | `cutout2.py <in_dir> <out_dir> [model] [--face-box x,y,w,h]` | G5 | background removal for figures rendered on a flat, known background: BiRefNet mask, then pockets removed, edge alpha solved against the known colour (no light halo), edge colour taken from the figure |

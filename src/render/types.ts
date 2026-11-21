@@ -50,6 +50,9 @@ export interface FinishSpec {
   /** sd: denoise of the grid tiles (0.25) and of the face tile (0.2); higher changes the eyes */
   denoise?: number;
   faceDenoise?: number;
+  /** sd: sampler and scheduler of the tiles (dpmpp_2m, karras): not an ancestral one, which adds noise every step */
+  sampler?: string;
+  scheduler?: string;
   /** gpt: least redraw pixels per output pixel (0.8); higher means more tiles */
   density?: number;
   /** the source item's regions (loupes), carried to the result at the new scale */

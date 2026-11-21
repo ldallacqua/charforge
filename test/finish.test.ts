@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
-import { codexRequest, sessionOf } from '../src/render/codex.ts';
-import { findPython, finish } from '../src/render/finish.ts';
+import { attachments, codexRequest, sessionOf } from '../src/render/codex.ts';
+import { findPython, finish, tilePrompt } from '../src/render/finish.ts';
+import { DEFAULT_MODEL, pickSize } from '../src/render/openai.ts';
 import { configFor, type RenderProfile } from '../src/render/index.ts';
 import { localInputs } from '../src/render/inputs.ts';
 import { createApp } from '../src/server/app.ts';
@@ -57,6 +58,31 @@ describe('finishing requests', () => {
     }
   });
 
+  it('the tile prompt names the backdrop the cut picked, and keeps the eyes', () => {
+    const p = tilePrompt(true, [230, 230, 230]);
+    expect(p).toMatch(/flat light grey \(#e6e6e6\) around the figure is empty background/);
+    expect(p).toMatch(/Keep the eyes exactly as drawn/);
+    expect(tilePrompt(false, [128, 128, 128])).toMatch(/Keep the background exactly as it is/);
+  });
+
+  it('codex attaches every reference, not only the picture to edit', () => {
+    expect(attachments({ prompt: 'x', rating: 'sfw', references: ['/a/m.png', '/a/s.png'] }, ['m.png', 's.png'], '/w'))
+      .toEqual(['--image', '/w/ref/m.png', '/w/ref/s.png', '--']);
+    expect(attachments({ prompt: 'x', rating: 'sfw', init: '/a/t0.png', edit: true }, ['t0.png'], '/w')).toEqual(['--image', '/w/ref/t0.png', '--']);
+    expect(attachments({ prompt: 'x', rating: 'sfw' }, [], '/w')).toEqual([]);
+    expect(codexRequest({ prompt: 'x', rating: 'sfw' }, ['m.png'])).toMatch(/Reference images \(attached/);
+  });
+
+  it('openai uses a live model and asks newer models for the exact shape', () => {
+    expect(DEFAULT_MODEL).not.toBe('gpt-image-1');
+    expect(pickSize(DEFAULT_MODEL, 1024, 1536)).toBe('1024x1536');
+    const [w, h] = pickSize(DEFAULT_MODEL, 2304, 4032).split('x').map(Number);
+    expect(w % 16 + h % 16).toBe(0);
+    expect(w * h).toBeLessThanOrEqual(2560 * 1440);
+    expect(Math.abs(w / h - 2304 / 4032)).toBeLessThan(0.01);
+    expect(pickSize('gpt-image-1.5', 900, 1500)).toBe('1024x1536');
+  });
+
   it('another backend can be asked for by name and keeps its options from the profile', () => {
     expect(configFor(hybrid, 'sfw')).toEqual(hybrid.sfw);
     expect(configFor(hybrid, 'sfw', 'comfyui')).toEqual(hybrid.nsfw);
@@ -71,9 +97,14 @@ describe.skipIf(!python)('finishing (tools/tiles.py)', () => {
     await writeFile(src, await picture(800, 1200, true));
     const [out] = await finish({ backend: 'mock' }, { prompt: '', rating: 'sfw', init: src, finish: { face: [340, 160, 460, 280] } }, join(dir, 'out'));
     expect([out.width, out.height]).toEqual([1600, 2400]);
-    const meta = out.meta.finish as { tiles: number; outline: string };
+    const meta = out.meta.finish as { tiles: number; outline: string; edgeLoss: number; back: number[] };
     expect(meta.tiles).toBe(4); // three full-width bands (1536x1024 redraws) and the face tile
     expect(meta.outline).toBe("the approved picture's"); // mock tiles are opaque
+    expect(meta.edgeLoss).toBe(0);
+    expect(meta.back).not.toEqual([46, 40, 56]); // the dark backdrop would sit on the dark stripes
+    // every tile has the shape of its redraw: nothing is stretched on the way to GPT
+    const plan = JSON.parse(await readFile(join(dir, 'out', 'tiles', 'tiles.json'), 'utf8')) as { tiles: { box: number[]; size: number[] }[] };
+    for (const t of plan.tiles) expect(Math.abs((t.box[2] - t.box[0]) / (t.box[3] - t.box[1]) - t.size[0] / t.size[1])).toBeLessThan(0.01);
     // Unchanged tiles must join back into the plain enlargement: any seam would show here.
     const a = await sharp(out.file).removeAlpha().raw().toBuffer();
     const b = await sharp(src).resize(1600, 2400, { kernel: 'lanczos3' }).flatten({ background: '#2e2838' }).raw().toBuffer();

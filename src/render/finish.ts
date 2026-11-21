@@ -30,21 +30,33 @@ const SCRIPT = join(ROOT, 'tools', 'tiles.py');
 
 export type FinishMode = 'gpt' | 'sd';
 
-/** What the GPT image tool is asked for each tile of a cut-out picture (sent on a flat dark colour). */
-export const TILE_PROMPT_CUTOUT =
-  'This is an enlarged, soft section cut from a larger anime illustration of a character. The flat dark colour around ' +
-  'the character is not part of the picture: it is empty background and must come out fully transparent. Redraw this ' +
-  'section sharp, in the same framing: keep every shape, line, colour, finger, fingernail, facial feature, ornament ' +
-  'and pattern exactly where it is, edge to edge, with nothing moved, added, removed, completed or cropped, no border, ' +
-  'no glow and no shadow around the character. Add only the fine detail the softness hides: crisp clean line art and ' +
-  'smooth shading, as a high resolution anime illustration with a transparent background.';
+const KEEP =
+  'Redraw this tile sharp, at exactly this framing, as if the same artist had drawn it at twice the resolution. Every ' +
+  'contour, hair strand, finger, fingernail, eyelash, ornament, fold and pattern stays exactly where it is, at the same ' +
+  'size and angle. Anything cut by the tile edge stays cut at the same place: do not complete, extend or crop it. Keep ' +
+  'every colour and the lighting as drawn, with the same highlight and shadow shapes. Keep the eyes exactly as drawn: ' +
+  'same eyelid height, iris colour, pupil shape and highlight positions; keep the mouth shape. Add nothing and remove ' +
+  'nothing: no new hair strands, jewellery, earrings, moles, freckles, blush, sweat or tears. Clean, continuous line art ' +
+  'of the same weight and colour as in the tile.';
 
-/** The same for an opaque picture (a master on its flat background). */
-export const TILE_PROMPT_OPAQUE =
-  'This is an enlarged, soft section cut from a larger anime illustration. Redraw this section sharp, in the same ' +
-  'framing: keep every shape, line, colour, finger, fingernail, facial feature, ornament, pattern and the background ' +
-  'exactly where they are, edge to edge, with nothing moved, added, removed, completed or cropped, and no border. Add ' +
-  'only the fine detail the softness hides: crisp clean line art and smooth shading, as a high resolution anime illustration.';
+const hex = (c: number[]) => '#' + c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+const shade = (c: number[]) => {
+  const l = (c[0] + c[1] + c[2]) / 3;
+  return l > 190 ? 'light grey' : l > 90 ? 'mid-grey' : 'dark grey';
+};
+
+/**
+ * What the GPT image tool is asked for each tile. A cut-out picture is sent on the backdrop tools/tiles.py
+ * picked (the colour farthest from the figure's outline), and the prompt names it.
+ */
+export function tilePrompt(cutout: boolean, back: number[]): string {
+  return cutout
+    ? `This is a soft, enlarged tile cut from a finished anime illustration of a character. The flat ${shade(back)} ` +
+        `(${hex(back)}) around the figure is empty background and must come out fully transparent. ${KEEP} No glow, no ` +
+        'light rim, no border and no shadow around the figure. Transparent background.'
+    : `This is a soft, enlarged tile cut from a finished anime illustration. ${KEEP} Keep the background exactly as it ` +
+        'is. No border.';
+}
 
 export const FINISH_LABEL: Record<FinishMode, string> = {
   gpt: 'GPT em blocos',
@@ -93,6 +105,7 @@ interface Plan {
   mode: FinishMode;
   scale: number;
   alpha: boolean;
+  back: number[];
   face: [number, number, number, number] | null;
   tiles: { box: [number, number, number, number]; size: [number, number]; face: boolean; denoise: number }[];
 }
@@ -145,8 +158,12 @@ export async function finish(config: BackendConfig, req: RenderRequest, outDir: 
     }
     const tileReq: RenderRequest =
       mode === 'gpt'
-        ? { prompt: plan.alpha ? TILE_PROMPT_CUTOUT : TILE_PROMPT_OPAQUE, rating: req.rating, init: sent, edit: true, transparent: plan.alpha, width: t.size[0], height: t.size[1], count: 1 }
-        : { prompt: req.prompt, negative: req.negative, rating: req.rating, init: sent, denoise: t.denoise, width: t.size[0], height: t.size[1], count: 1, seed, options: { ...req.options, hires: false } };
+        ? { prompt: tilePrompt(plan.alpha, plan.back), rating: req.rating, init: sent, edit: true, transparent: plan.alpha, width: t.size[0], height: t.size[1], count: 1 }
+        : {
+            prompt: req.prompt, negative: req.negative, rating: req.rating, init: sent, denoise: t.denoise, width: t.size[0], height: t.size[1], count: 1, seed,
+            // An ancestral sampler adds fresh noise at every step: at low denoise that is what moves the eyes.
+            options: { ...req.options, hires: false, sampler: spec.sampler ?? 'dpmpp_2m', scheduler: spec.scheduler ?? 'karras' },
+          };
     let last: unknown;
     for (let attempt = 1; attempt <= tries; attempt++) {
       try {
@@ -166,7 +183,7 @@ export async function finish(config: BackendConfig, req: RenderRequest, outDir: 
   // A redraw that does not line up with what was sent (another picture, or reframed) is left out by
   // the join and drawn again; after two more rounds the finishing fails rather than guess.
   const file = join(outDir, `finished-${mode}-${Date.now()}.png`);
-  let joined: { outline?: string; tiles: { tile: number; dropped?: boolean }[] };
+  let joined: { outline?: string; edge_loss?: number; tiles: { tile: number; dropped?: boolean }[] };
   for (let round = 0; ; round++) {
     joined = (await tiles(['join', req.init, work, file])) as typeof joined;
     const dropped = joined.tiles.filter((t) => t.dropped).map((t) => t.tile);
@@ -175,10 +192,17 @@ export async function finish(config: BackendConfig, req: RenderRequest, outDir: 
     log(`finish: tiles ${dropped.join(', ')} did not line up with the picture; drawing them again`);
     await pool(dropped.length, width, (k) => redraw(dropped[k]));
   }
+  // Outline pixels that were solid in the approved picture and came out see-through: near 0 when the join is right.
+  if ((joined.edge_loss ?? 0) > 0.02) log(`finish: ${(joined.edge_loss! * 100).toFixed(1)}% of the outline lost opacity; check the edges at 3x`);
   const m = await sharp(file).metadata();
   return [{
     file, width: m.width ?? 0, height: m.height ?? 0, seed: mode === 'sd' ? seed : undefined, backend: config.backend,
-    meta: { finish: { mode, method: FINISH_LABEL[mode], scale: plan.scale, tiles: plan.tiles.length, face: plan.face, outline: joined.outline, fit: joined.tiles } },
+    meta: {
+      finish: {
+        mode, method: FINISH_LABEL[mode], scale: plan.scale, tiles: plan.tiles.length, face: plan.face, back: plan.back,
+        outline: joined.outline, edgeLoss: joined.edge_loss, fit: joined.tiles,
+      },
+    },
   }];
 }
 

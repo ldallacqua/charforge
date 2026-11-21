@@ -10,6 +10,10 @@ Checks, per set and across sets:
   top       nothing cropped at the top (first opaque row > 4 px)
   bottom    the figure runs off the bottom edge (no floating feet / gap)
   halo      light fringe on the cut-out edge (semi-transparent near-white edge pixels) below 2 %
+  rim       mostly opaque pixels on the figure's outermost ring that are light and much lighter than the
+            figure just inside: background painted into the edge (a render on white), which halo misses because
+            they are opaque. On a dark chat background they read as a cut-out rim. WARN above 0.5 %, FAIL above
+            1.5 % of the ring; white hair or clothes with no outline can warn, so judge it at 3x
   pockets   (needs opencv) near-white blobs >= 40 px (alpha > 100) ringed mostly by dark pixels (line art,
             hair, wing), or partly dark and touching the outside without a skin ring: background trapped
             inside the figure (FAIL). Large white blobs ringed by skin can be a pocket or a skin shine:
@@ -51,6 +55,25 @@ def halo_ratio(a):
     inner = box_mean(luma * opaque, 3) / np.maximum(box_mean(opaque, 3), 1e-3)
     fringe = edge & (luma > 200) & (luma - inner > 60) & (box_mean(opaque, 3) > 0.15)
     return float(fringe.sum() / edge.sum())
+
+
+def rim_ratio(a):
+    """Share of the figure's outermost ring (pixels touching empty ones) that is light and much lighter than
+    the figure just inside it: background painted into the edge. Pale skin next to pale skin is not counted."""
+    alpha = a[..., 3]
+    out = np.pad(alpha == 0, 1, constant_values=True)
+    near = np.zeros_like(alpha, bool)
+    for dy in (0, 1, 2):
+        for dx in (0, 1, 2):
+            near |= out[dy:dy + alpha.shape[0], dx:dx + alpha.shape[1]]
+    ring = (alpha > 0) & near
+    if not ring.any():
+        return 0.0
+    luma = a[..., :3].astype(np.float32).mean(-1)
+    core = ((alpha >= 250) & ~ring).astype(np.float32)
+    inner = box_mean(luma * core, 3) / np.maximum(box_mean(core, 3), 1e-3)
+    rim = ring & (alpha >= 128) & (luma > 150) & (luma - inner > 30) & (box_mean(core, 3) > 0.1)
+    return float(rim.sum() / ring.sum())
 
 
 def pockets(a, exclude):
@@ -113,7 +136,7 @@ def main():
         missing = [l for l in LABELS if l not in files]
         if missing:
             fails.append(f'{name}: missing labels {missing}')
-        worst_halo, bad = 0.0, []
+        worst_halo, worst_rim, bad = 0.0, 0.0, []
         for stem, p in sorted(files.items()):
             im = Image.open(p)
             sizes.add(im.size)
@@ -131,6 +154,12 @@ def main():
             worst_halo = max(worst_halo, h)
             if h > 0.02:
                 bad.append(f'{stem}: light halo {h:.1%}')
+            rim = rim_ratio(a)
+            worst_rim = max(worst_rim, rim)
+            if rim > 0.015:
+                bad.append(f'{stem}: light rim on {rim:.1%} of the outline')
+            elif rim > 0.005:
+                suspects_all.append(f'{name}/{stem}: light rim on {rim:.1%} of the outline (white hair or clothes, or a cut-out rim? check at 3x)')
             try:
                 pk, sus = pockets(a, face_ex or (im.width * 0.3, im.height * 0.2, im.width * 0.7, im.height * 0.45))
             except ImportError:
@@ -153,7 +182,7 @@ def main():
                 if fb is not None:
                     faces.setdefault(stem, {})[name] = fb
         fails += [f'{name}: {b}' for b in bad]
-        print(f'{name:10s} {len(files):2d} files  worst halo {worst_halo:.2%}  {"OK" if not bad and not missing else "FAIL"}')
+        print(f'{name:10s} {len(files):2d} files  worst halo {worst_halo:.2%}  worst rim {worst_rim:.2%}  {"OK" if not bad and not missing else "FAIL"}')
     if len(sizes) > 1:
         fails.append(f'canvas sizes differ: {sorted(sizes)}')
     warns = []

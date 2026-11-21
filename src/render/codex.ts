@@ -44,12 +44,21 @@ export function codexRequest(req: RenderRequest, refs: string[]): string {
     'Then copy the PNG file to ./out/image.png and do nothing else. Do not create or change any other file.',
     `Orientation and size: ${orientation(req)}.`,
     req.transparent ? 'Background: transparent PNG (no background at all).' : 'Background: plain flat white unless the description says otherwise.',
-    refs.length ? `Reference images, keep this exact character design (face, hair, outfit, colours): ${refs.map((r) => `./ref/${r}`).join(', ')}.` : '',
+    refs.length ? `Reference images (attached, also at ${refs.map((r) => `./ref/${r}`).join(', ')}): pass them to the image tool and keep this exact character design (face, hair, horns, ornaments, outfit, colours).` : '',
     '',
     'Image description:',
     req.prompt,
     req.negative ? `\nAvoid: ${req.negative}` : '',
   ].filter((l) => l !== '').join('\n');
+}
+
+/**
+ * The `--image` arguments: the image tool only sees attached images, a path named in the text is not
+ * enough. Edit mode attaches the picture to change; otherwise every reference is attached.
+ */
+export function attachments(req: RenderRequest, refs: string[], wd: string): string[] {
+  const attached = req.edit && req.init ? [basename(req.init)] : refs;
+  return attached.length ? ['--image', ...attached.map((r) => join(wd, 'ref', r)), '--'] : [];
 }
 
 function run(bin: string, args: string[], input: string, timeoutMs: number): Promise<string> {
@@ -146,7 +155,7 @@ export const codex: Backend = {
         await writeFile(join(wd, 'request.txt'), request);
         const started = Date.now();
         log(`codex: image ${i + 1}/${req.count ?? 1} (about a minute)`);
-        const attach = req.edit && req.init ? ['--image', join(wd, 'ref', basename(req.init)), '--'] : [];
+        const attach = attachments(req, refs, wd);
         await run(bin, ['exec', '-C', wd, '--approve-for-me', '--skip-git-repo-check', ...attach, '-'], request, timeoutMs);
         // The image the tool saved in this run's own session is the truth: the agent's copy to ./out
         // has been seen to grab another parallel run's image. ./out only when the session is not found.
