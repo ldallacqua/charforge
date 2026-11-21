@@ -97,8 +97,9 @@ owner compared and approved. The join holds for four reasons:
 - each tile keeps its fine detail and takes its overall colour from the approved picture, so tiles agree
   and skin and hair keep the approved colours;
 - on a cut-out the outline is the redraw's, trusted only near the approved outline: it may move inwards by
-  2 px at most, and the join reports `edge_loss` (outline pixels that were solid and came out see-through,
-  ~0 when right; a finish above 2 % logs a warning).
+  2 px at most, and the join reports `edge_loss` (pixels that were solid and came out see-through, per
+  outline pixel: ~0.12 on a clean finish of Rin's sprite, ~0.3 with the old dark backdrop; above 0.25 the
+  finish logs a warning).
 
 | Backend | Method | Tiles | Time (Rin, measured) |
 |---|---|---|---|

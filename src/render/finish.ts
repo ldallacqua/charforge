@@ -192,8 +192,9 @@ export async function finish(config: BackendConfig, req: RenderRequest, outDir: 
     log(`finish: tiles ${dropped.join(', ')} did not line up with the picture; drawing them again`);
     await pool(dropped.length, width, (k) => redraw(dropped[k]));
   }
-  // Outline pixels that were solid in the approved picture and came out see-through: near 0 when the join is right.
-  if ((joined.edge_loss ?? 0) > 0.02) log(`finish: ${(joined.edge_loss! * 100).toFixed(1)}% of the outline lost opacity; check the edges at 3x`);
+  // Outline pixels that were solid in the approved picture and came out see-through, per outline pixel. GPT's
+  // outline may sit up to 2 px inside: a clean finish of Rin's sprite measures ~0.12, the old dark backdrop ~0.3.
+  if ((joined.edge_loss ?? 0) > 0.25) log(`finish: ${(joined.edge_loss! * 100).toFixed(1)}% of the outline lost opacity; check the edges at 3x`);
   const m = await sharp(file).metadata();
   return [{
     file, width: m.width ?? 0, height: m.height ?? 0, seed: mode === 'sd' ? seed : undefined, backend: config.backend,

@@ -326,7 +326,7 @@ def join(args):
     outline = ("the redraw's" if own_outline else "the approved picture's") if cut_out_picture else 'none (opaque)'
     result = {'out': out, 'size': [across, high], 'outline': outline, 'tiles': report}
     if cut_out_picture:
-        # solid in the approved picture, see-through in the result, per outline pixel (should be ~0)
+        # solid in the approved picture, see-through in the result, per outline pixel (~0.12 on a clean GPT finish)
         edge = (approved > 0.5) & ~cv2.erode((approved > 0.5).astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
         result['edge_loss'] = round(float(((approved > 0.98) & (alpha < 0.9)).sum() / max(int(edge.sum()), 1)), 4)
     print(json.dumps(result))
