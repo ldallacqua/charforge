@@ -36,7 +36,7 @@ sprite was a separate drawing, so six poses showed six slightly different Rins.
    used (SillyTavern: ~3 bodies x 16 expressions; a game: what its script calls for). Layers multiply: a
    new body later reuses every expression drawn at the same head angle.
 6. **Every final image gets the finishing chain:** a hires pass (1.5x at denoise 0.4) and a face pass on
-   local renders; and every approved body is **finished at 2x in tiles once** (`forge finish`,
+   local renders (both automatic in `forge render` on ComfyUI; judge a LoRA only on images that had them); and every approved body is **finished at 2x in tiles once** (`forge finish`,
    [RENDERING.md](RENDERING.md#finishing-2x-in-tiles)) before anything is drawn on it or cropped from it.
 7. **A style bible is pasted into every request:** palette (hex per material), line, shading, light, eye
    highlights. Prompts stay clean: 15-30 tags (or a short paragraph for GPT), one framing, no repeated

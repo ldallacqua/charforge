@@ -8,6 +8,7 @@
 #   python -I tools/tiles.py cut  <picture> <work dir> --mode gpt|sd [--scale 2] [--face x,y,w,h]
 #   (the backend redraws every tN.png in the work dir as oN.png)
 #   python -I tools/tiles.py join <picture> <work dir> <out.png>
+#   python -I tools/tiles.py face <picture>     (the face box, for the local renders' face pass)
 #
 # Needs numpy, pillow and opencv-python-headless (tools/requirements.txt). Python 3.9+.
 #
@@ -344,12 +345,17 @@ def main():
     c.add_argument('--density', type=float, default=0.8, help='gpt: least redraw pixels per output pixel')
     c.add_argument('--denoise', type=float, default=0.25, help='sd: denoise of the grid tiles')
     c.add_argument('--face-denoise', type=float, default=0.2, help='sd: denoise of the face tile (higher changes the eyes)')
+    f = sub.add_parser('face', help='print the largest anime face as {"face": [x, y, w, h]} (or null)')
+    f.add_argument('picture')
     j = sub.add_parser('join')
     j.add_argument('picture')
     j.add_argument('work')
     j.add_argument('out')
     args = p.parse_args()
-    cut(args) if args.command == 'cut' else join(args)
+    if args.command == 'face':
+        print(json.dumps({'face': detect_face(load(args.picture)[0])}))
+    else:
+        cut(args) if args.command == 'cut' else join(args)
 
 
 if __name__ == '__main__':

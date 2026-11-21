@@ -141,3 +141,11 @@ describe('next step', () => {
     expect(nextStep(db.getCharacter('lyra')!, [])).toMatchObject({ gate: 'g3', state: 'start' });
   });
 });
+
+describe('local face pass', () => {
+  it('drops the framing from the prompt and asks for a close-up of the face', async () => {
+    const { facePrompt } = await import('../src/render/comfyui.ts');
+    const p = facePrompt('rinsuccubus_v2, rin_gown, 1girl, solo, full body, standing, smirk, Cowboy Shot, throne room');
+    expect(p).toBe('rinsuccubus_v2, rin_gown, 1girl, solo, standing, smirk, throne room, portrait, close-up, face focus, detailed eyes, detailed face');
+  });
+});

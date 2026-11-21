@@ -15,18 +15,14 @@
 // Machine settings (env): CHARFORGE_PYTHON, a Python with numpy, pillow and opencv-python-headless<5.
 // Found automatically at tools/.venv.
 
-import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import sharp from 'sharp';
 import { BACKENDS, render } from './index.ts';
+import { tiles } from './python.ts';
+export { findPython } from './python.ts';
 import type { BackendConfig, BackendId, Log, RenderOutput, RenderRequest } from './types.ts';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const SCRIPT = join(ROOT, 'tools', 'tiles.py');
 
 export type FinishMode = 'gpt' | 'sd';
 
@@ -67,38 +63,6 @@ export function finishMode(backend: BackendId): FinishMode {
   if (backend === 'comfyui') return 'sd';
   if (backend === 'codex' || backend === 'openai' || backend === 'mock') return 'gpt';
   throw new Error(`the ${backend} backend cannot finish pictures (use comfyui, codex or openai)`);
-}
-
-export function findPython(): string {
-  if (process.env.CHARFORGE_PYTHON) return process.env.CHARFORGE_PYTHON;
-  for (const p of [join(ROOT, 'tools', '.venv', 'bin', 'python'), join(ROOT, 'tools', '.venv', 'Scripts', 'python.exe')]) if (existsSync(p)) return p;
-  return 'python3';
-}
-
-const SETUP = 'python3 -m venv tools/.venv && tools/.venv/bin/pip install numpy pillow "opencv-python-headless<5" (or set CHARFORGE_PYTHON)';
-
-function tiles(args: string[]): Promise<Record<string, unknown>> {
-  const python = findPython();
-  return new Promise((resolve_, reject) => {
-    const p = spawn(python, ['-I', SCRIPT, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let out = '';
-    let err = '';
-    p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (err += d));
-    p.on('error', (e) => reject(new Error(`could not run ${python} (${e.message}). The finishing step needs Python: ${SETUP}`)));
-    p.on('close', (code) => {
-      if (code !== 0) {
-        const missing = /No module named '(\w+)'/.exec(err);
-        return reject(new Error(missing ? `${python} has no ${missing[1]}: ${SETUP}` : `tools/tiles.py ${args[0]} failed: ${err.trim().split('\n').slice(-3).join(' ')}`));
-      }
-      const last = out.trim().split('\n').pop() ?? '{}';
-      try {
-        resolve_(JSON.parse(last));
-      } catch {
-        reject(new Error(`tools/tiles.py ${args[0]} printed no result: ${last}`));
-      }
-    });
-  });
 }
 
 interface Plan {

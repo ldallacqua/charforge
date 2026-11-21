@@ -74,7 +74,7 @@ The images arrive as a new batch.
 
 | Backend | Native size | Transparency |
 |---|---|---|
-| comfyui (SDXL) | ~1 MP base (832 x 1216, 768 x 1344, 1152 x 896), hires 1.5x built in | none: render on flat white and run `tools/cutout2.py` (LayerDiffuse for SDXL and Qwen-Image 2.1 are native options not wired in yet) |
+| comfyui (SDXL) | ~1 MP base (832 x 1216, 768 x 1344, 1152 x 896), hires 1.5x built in, then an automatic **face pass** (the face found, cropped at 1.6x its width, redrawn at 1024 px with the same LoRA at denoise 0.5, `dpmpp_2m` + `karras`, pasted back feathered; option `face`, `false` to skip; not on img2img). Without it a full-body face (~200 px after hires) has soft eyes, ears and mouth: Rin V2's owner rejected every full-body LoRA test image for that | none: render on flat white and run `tools/cutout2.py` (LayerDiffuse for SDXL and Qwen-Image 2.1 are native options not wired in yet) |
 | openai | `gpt-image-2.5-sunburst` by default (`gpt-image-1` was shut down on 2026-10-23): the request's exact shape, divisible by 16, from 1024 x 1536 worth of pixels up to 2560 x 1440 worth (above that the API calls it experimental); other models get 1024 x 1024, 1024 x 1536 or 1536 x 1024 | `--transparent` |
 | codex | ~1024 x 1536 (plan limit), ~60-100 s per image; references are attached to the run (`--image`), not only named | `--transparent` |
 
