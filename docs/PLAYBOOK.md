@@ -269,8 +269,9 @@ Built in layers from the G2.5 layout. Outfit sets for SillyTavern: the canonical
    DifferentialDiffusion, denoise 0.6-0.75, `dpmpp_2m` + `karras`, 24 steps, a 2x face context crop).
    QA: the largest difference outside the masks is 0.
 6. **Other outfits below the chin**: on the finished dressed body, inpaint locally inside the outfit mask
-   (denoise 1.0, DifferentialDiffusion at the edge); the head, horns, wings and the expression layers are
-   the same pixels in every set, so the head GPT finished on the SFW body is reused without any NSFW image
+   (denoise 1.0, DifferentialDiffusion at the edge), with the hands cut out of the mask (the hand detector's
+   boxes, dilated): the local model adds fingers that no pass removes (lesson 15). The head, horns, wings,
+   hands and the expression layers are the same pixels in every set, so the head GPT finished on the SFW body is reused without any NSFW image
    leaving the GPU. Check the neck seam at 3x.
 7. **Composite** body x expression x outfit into flat images; keep the layers.
 8. **Display crop** with the one global scale: for SillyTavern 832 x 1367, face width F = 265 px, face top
@@ -367,6 +368,12 @@ repeating one is not). Where a check or a default can prevent it, add that too a
 14. **Installing ultralytics replaced the OpenCV build** (it pins numpy 1.x; OpenCV 4.12+ needs numpy 2):
     two cv2 packages ended up installed. *Fixed:* one build, `opencv-python==4.11.0.86` (tools/README.md),
     and `pip check` after any install into tools/.venv.
+15. **I reported five fingers on hands that had six.** I counted on 260 px crops, below this playbook's own
+    400 px rule; the owner found extra fingers on 4 of the 5 hands. *Fixed:* count on crops of at least
+    460 px, one nail at a time with the thumb counted apart, and never write a count in the notes that was
+    made smaller. And the hand pass at denoise 0.45 keeps the hand's shape, so it cannot remove a finger:
+    *rule:* in sprites the hands are always the cloud backend's pixels (G5 step 6 keeps them out of the
+    outfit mask); a hand only the local model can draw (CGs) is picked from several seeds by the owner.
 
 ### From the first character (Rin V1)
 
